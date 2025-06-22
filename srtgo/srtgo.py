@@ -4,7 +4,7 @@ from random import random, uniform, gammavariate
 from requests.exceptions import ConnectionError
 from termcolor import colored
 from typing import Awaitable, Callable, List, Optional, Tuple, Union
-
+from .accounts import list_accounts, add_account, get_account_credentials
 
 import asyncio
 import click
@@ -94,7 +94,7 @@ def srtgo(debug=False):
     ACTIONS = {
         1: lambda rt: reserve(rt, debug),
         2: lambda rt: check_reservation(rt, debug),
-        3: lambda rt: set_login(rt, debug),
+        3: lambda rt: manage_accounts(rt),
         4: lambda _: set_telegram(),
         5: lambda _: set_card(),
         6: lambda rt: set_station(rt),
@@ -327,6 +327,12 @@ def login(rail_type="SRT", debug=False):
 
 
 def reserve(rail_type="SRT", debug=False):
+# ① 미리 계정 별명 목록을 보여주고, 선택된 계정으로 keyring 세팅
+    if not manage_accounts(rail_type):
+        print("🚫 계정이 선택되지 않아 예매를 취소합니다.")
+        return False
+
+    # ② 선택된 계정(keyring)으로 실제 로그인
     rail = login(rail_type, debug=debug)
     is_srt = rail_type == "SRT"
 
@@ -694,6 +700,48 @@ def check_reservation(rail_type="SRT", debug=False):
             except Exception as err:
                 raise err
             return
+        
+def manage_accounts(rail_type: RailType) -> bool:
+    """
+    1) 저장된 별명 리스트를 보여주고
+    2) 별명 선택 → 해당 계정으로 keyring 설정
+    3) '추가하기' 선택 → ID/패스워드/별명 입력 후 저장
+    """
+    # 1) 별명 리스트 + '추가하기' 옵션 구성
+    aliases = list_accounts(rail_type)
+    choices = [(alias, alias) for alias in aliases]
+    choices.append(("추가하기", "add"))
+    choices.append(("취소", None))
+
+    selected = inquirer.list_input(
+        message=f"{rail_type} 계정 관리 (별명 선택 ↕, Enter: 선택)",
+        choices=choices
+    )
+    if selected is None:
+        return False
+
+    # 2) '추가하기' 로직
+    if selected == "add":
+        info = inquirer.prompt([
+            inquirer.Text("id",    message=f"{rail_type} 계정 아이디"),
+            inquirer.Password("pass", message=f"{rail_type} 계정 패스워드"),
+            inquirer.Text("alias", message="계정 별명")
+        ])
+        if not info:
+            return False
+        add_account(rail_type, info["alias"], info["id"], info["pass"])
+        print(f"✅ 계정 '{info['alias']}'이(가) 추가되었습니다.")
+        return True
+
+    # 3) 기존 별명 선택 시 keyring 재설정
+    alias = selected
+    user_id, pw = get_account_credentials(rail_type, alias)
+    keyring.set_password(rail_type, "id",   user_id)
+    keyring.set_password(rail_type, "pass", pw)
+    keyring.set_password(rail_type, "ok",   "1")
+    print(f"✅ '{alias}' 계정으로 로그인 설정이 변경되었습니다.")
+    return True
+
 
 
 if __name__ == "__main__":
