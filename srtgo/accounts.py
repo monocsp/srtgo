@@ -1,113 +1,92 @@
 import json
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
-import keyring
-
-# 파일 경로: 사용자 홈 디렉터리 아래 숨김 JSON 파일로 계정 정보를 저장합니다.
-ACCOUNTS_FILE = Path.home() / ".srtgo_accounts.json"
-# keyring 서비스 이름 접두사
-SERVICE_PREFIX = "srtgo"
+from typing import List, Tuple
 
 @dataclass
 class Account:
+    """
+    사용자 계정 정보를 담는 데이터 클래스
+    alias: 별칭
+    user_id: 로그인에 사용할 아이디
+    password: 로그인 비밀번호
+    """
     alias: str
-    rail_type: str
     user_id: str
+    password: str
 
 
-def load_accounts() -> Dict[str, List[Account]]:
+def _get_file_path(rail_type: str) -> Path:
     """
-    저장된 모든 계정을 불러옵니다.
-    반환 형식: { "SRT": [Account, ...], "KTX": [Account, ...] }
+    rail_type 에 따라 JSON 파일 경로를 반환합니다.
+    rail_type: 'SRT' 또는 'KTX'
+    파일명: srt_login.json 또는 ktx_login.json
     """
-    if not ACCOUNTS_FILE.exists():
-        return {"SRT": [], "KTX": []}
-    data = json.loads(ACCOUNTS_FILE.read_text(encoding='utf-8'))
-    accounts: Dict[str, List[Account]] = {"SRT": [], "KTX": []}
-    for rail in ("SRT", "KTX"):
-        for item in data.get(rail, []):
-            accounts[rail].append(
-                Account(
-                    alias=item["alias"],
-                    rail_type=rail,
-                    user_id=item["user_id"]
-                )
-            )
-    return accounts
+    filename = f"{rail_type.lower()}_login.json"
+    return Path(__file__).parent / filename
 
 
-def save_accounts(accounts: Dict[str, List[Account]]) -> None:
+def load_accounts(rail_type: str) -> List[Account]:
     """
-    메모리 상의 계정 리스트를 JSON 파일로 저장합니다.
+    저장된 계정 목록을 로드합니다.
+    파일이 없으면 빈 리스트를 반환하고 새로운 파일을 생성합니다.
     """
-    data = {}
-    for rail_type, lst in accounts.items():
-        data[rail_type] = [
-            {"alias": acc.alias, "user_id": acc.user_id}
-            for acc in lst
-        ]
-    ACCOUNTS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    path = _get_file_path(rail_type)
+    if not path.exists():
+        path.write_text("[]", encoding="utf-8")
+        return []
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return [Account(**item) for item in data]
 
 
-def list_accounts(rail_type: str) -> List[str]:
+def save_accounts(rail_type: str, accounts: List[Account]) -> None:
     """
-    특정 철도(SRT 또는 KTX)에 저장된 계정 별명(aliases) 목록을 반환합니다.
+    계정 리스트를 JSON 파일로 저장합니다.
+    파일이 없으면 자동 생성됩니다.
     """
-    accounts = load_accounts()
-    return [acc.alias for acc in accounts.get(rail_type, [])]
+    path = _get_file_path(rail_type)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = [acc.__dict__ for acc in accounts]
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def list_aliases(rail_type: str) -> List[str]:
+    """
+    rail_type 에 저장된 모든 alias(별명) 목록을 반환합니다.
+    """
+    return [acc.alias for acc in load_accounts(rail_type)]
 
 
 def add_account(rail_type: str, alias: str, user_id: str, password: str) -> None:
     """
-    새로운 계정을 추가합니다.
-    1. JSON 파일에 alias 및 user_id를 저장
-    2. keyring에 비밀번호를 저장
-
-    rail_type: "SRT" 또는 "KTX"
-    alias: 계정 별명(고유해야 함)
-    user_id: 로그인용 아이디(멤버십 번호, 이메일 등)
-    password: 로그인 비밀번호
+    새로운 계정을 추가하고 JSON 파일에 저장합니다.
+    중복 alias가 있으면 ValueError 발생.
+    추가된 계정은 목록의 최상단에 위치합니다.
     """
-    accounts = load_accounts()
-    if rail_type not in accounts:
-        accounts[rail_type] = []
-    # 중복 별명 방지
-    if any(acc.alias == alias for acc in accounts[rail_type]):
+    accounts = load_accounts(rail_type)
+    if any(acc.alias == alias for acc in accounts):
         raise ValueError(f"Alias '{alias}' already exists for '{rail_type}'")
-    # JSON에 저장
-    accounts[rail_type].append(Account(alias=alias, rail_type=rail_type, user_id=user_id))
-    save_accounts(accounts)
-    # keyring에 비밀번호 저장
-    service_name = f"{SERVICE_PREFIX}-{rail_type}"
-    keyring.set_password(service_name, alias, password)
+    accounts.insert(0, Account(alias=alias, user_id=user_id, password=password))
+    save_accounts(rail_type, accounts)
 
 
 def get_account_credentials(rail_type: str, alias: str) -> Tuple[str, str]:
     """
-    alias로 저장된 계정의 (user_id, password) 튜플을 반환합니다.
+    alias 에 해당하는 (user_id, password) 튜플을 반환합니다.
+    해당 alias가 없으면 KeyError 발생.
     """
-    accounts = load_accounts().get(rail_type, [])
+    accounts = load_accounts(rail_type)
     for acc in accounts:
         if acc.alias == alias:
-            service_name = f"{SERVICE_PREFIX}-{rail_type}"
-            pwd = keyring.get_password(service_name, alias)
-            if pwd is None:
-                raise KeyError(f"Password not found for alias '{alias}'")
-            return acc.user_id, pwd
+            return acc.user_id, acc.password
     raise KeyError(f"Alias '{alias}' not found for '{rail_type}'")
 
 
 def remove_account(rail_type: str, alias: str) -> None:
     """
-    저장된 계정을 삭제합니다.
-    JSON과 keyring에서 모두 해당 항목을 제거합니다.
+    저장된 계정을 삭제하고 JSON 파일을 업데이트합니다.
     """
-    accounts = load_accounts()
-    if rail_type not in accounts:
-        return
-    new_list = [acc for acc in accounts[rail_type] if acc.alias != alias]
-    accounts[rail_type] = new_list
-    save_accounts(accounts)
-    service_name = f"{SERVICE_PREFIX}-{rail_type}"
-    keyring.delete_password(service_name, alias)
+    accounts = load_accounts(rail_type)
+    filtered = [acc for acc in accounts if acc.alias != alias]
+    save_accounts(rail_type, filtered)

@@ -1,4 +1,5 @@
 # SRTgo: K-Train (KTX, SRT) Reservation Macro
+
 - ⚠️본 프로그램의 모든 상업적, 영리적 이용을 엄격히 금지합니다. 본 프로그램 사용에 따른 민형사상 책임을 포함한 모든 책임은 사용자에게 따르며, 본 프로그램의 개발자는 민형사상 책임을 포함한 어떠한 책임도 부담하지 아니합니다. 📥본 프로그램을 다운받음으로서 모든 사용자는 위 사항에 아무런 이의 없이 동의하는 것으로 간주됩니다.
 - SRT 및 KTX 기차표 예매를 자동화하는 매크로입니다.
 - 아이디, 비번, 카드번호, 예매 설정 등은 로컬 컴퓨터에 [keyring 모듈](https://pypi.org/project/keyring/)을 통하여 저장하며 공유되지 않습니다.
@@ -9,6 +10,7 @@
 - [New] 자주 사용하는 역을 지정할 수 있습니다.
 
 ---
+
 SRTgo is:
 
 - This module is designed to automate the reservation of SRT and KTX train tickets.
@@ -16,11 +18,15 @@ SRTgo is:
 - After the reservation is completed, a Telegram notification will be sent.
 - In the case of reservation confirmation/cancellation, for SRT, all tickets can be confirmed or canceled, while for KTX, only unpaid tickets can be confirmed or canceled.
 
-
 ## Installation / Update
+
 ```bash
 pip install srtgo -U
 ```
+
+## start srtgo
+
+python -m srtgo.srtgo
 
 ## Using SRTgo
 
@@ -95,7 +101,7 @@ pip install srtgo -U
    8
    9
 
-[?] 예약할 열차 선택 (↕:이동, Space: 선택, Enter: 완료, Ctrl-C: 취소): 
+[?] 예약할 열차 선택 (↕:이동, Space: 선택, Enter: 완료, Ctrl-C: 취소):
    [ ] [SRT 323] 01월 04일, 수서~동대구(10:00~11:40) 특실 매진, 일반실 매진, 예약대기 불가능
    [ ] [SRT 325] 01월 04일, 수서~동대구(10:30~12:17) 특실 매진, 일반실 매진, 예약대기 불가능
    [ ] [SRT 327] 01월 04일, 수서~동대구(10:50~12:30) 특실 매진, 일반실 매진, 예약대기 불가능

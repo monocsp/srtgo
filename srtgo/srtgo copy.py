@@ -37,10 +37,6 @@ from .srt import (
     Disability4To6,
 )
 
-from .accounts import list_aliases, add_account, get_account_credentials
-from .cards import list_card_aliases, add_card as add_card_info, get_card_credentials as get_card_info, remove_card as remove_card_info
-
-
 
 STATIONS = {
     "SRT": [
@@ -153,7 +149,7 @@ def srtgo(debug=False):
     ACTIONS = {
         1: lambda rt: reserve(rt, debug),
         2: lambda rt: check_reservation(rt, debug),
-        3: lambda rt: login_menu(rt, debug),
+        3: lambda rt: set_login(rt, debug),
         4: lambda _: set_telegram(),
         5: lambda _: set_card(),
         6: lambda rt: set_station(rt),
@@ -339,68 +335,42 @@ def get_telegram() -> Optional[Callable[[str], Awaitable[None]]]:
     return tgprintf
 
 
-# def set_card() -> None:
-#     card_info = {
-#         "number": keyring.get_password("card", "number") or "",
-#         "password": keyring.get_password("card", "password") or "",
-#         "birthday": keyring.get_password("card", "birthday") or "",
-#         "expire": keyring.get_password("card", "expire") or "",
-#     }
-
-#     card_info = inquirer.prompt(
-#         [
-#             inquirer.Password(
-#                 "number",
-#                 message="신용카드 번호 (하이픈 제외(-), Enter: 완료, Ctrl-C: 취소)",
-#                 default=card_info["number"],
-#             ),
-#             inquirer.Password(
-#                 "password",
-#                 message="카드 비밀번호 앞 2자리 (Enter: 완료, Ctrl-C: 취소)",
-#                 default=card_info["password"],
-#             ),
-#             inquirer.Password(
-#                 "birthday",
-#                 message="생년월일 (YYMMDD) / 사업자등록번호 (Enter: 완료, Ctrl-C: 취소)",
-#                 default=card_info["birthday"],
-#             ),
-#             inquirer.Password(
-#                 "expire",
-#                 message="카드 유효기간 (YYMM, Enter: 완료, Ctrl-C: 취소)",
-#                 default=card_info["expire"],
-#             ),
-#         ]
-#     )
-#     if card_info:
-#         for key, value in card_info.items():
-#             keyring.set_password("card", key, value)
-#         keyring.set_password("card", "ok", "1")
 def set_card() -> None:
-    
-    # 1) 민감 정보 입력
-    info = inquirer.prompt([
-        inquirer.Text("number",   message="신용카드 번호 (하이픈 제외)"),
-        inquirer.Text("password", message="카드 비밀번호 앞 2자리"),
-        inquirer.Text("birthday", message="생년월일 (YYMMDD) 또는 사업자등록번호"),
-        inquirer.Text("expire",   message="카드 유효기간 (YYMM)"),
-        inquirer.Text("alias",    message="별명 (ex: 회사, 개인)"),
-    ])
-    if not info:
-        return
+    card_info = {
+        "number": keyring.get_password("card", "number") or "",
+        "password": keyring.get_password("card", "password") or "",
+        "birthday": keyring.get_password("card", "birthday") or "",
+        "expire": keyring.get_password("card", "expire") or "",
+    }
 
-    # 2) 카드정보 Keyring + alias JSON 저장
-    try:
-        add_card_info(
-            info["alias"],
-            info["number"],
-            info["password"],
-            info["birthday"],
-            info["expire"],
-        )
-        print(f"✅ 카드 '{info['alias']}' 등록 완료")
-    except Exception as e:
-        print(f"❌ 카드 등록 실패: {e}")
-
+    card_info = inquirer.prompt(
+        [
+            inquirer.Password(
+                "number",
+                message="신용카드 번호 (하이픈 제외(-), Enter: 완료, Ctrl-C: 취소)",
+                default=card_info["number"],
+            ),
+            inquirer.Password(
+                "password",
+                message="카드 비밀번호 앞 2자리 (Enter: 완료, Ctrl-C: 취소)",
+                default=card_info["password"],
+            ),
+            inquirer.Password(
+                "birthday",
+                message="생년월일 (YYMMDD) / 사업자등록번호 (Enter: 완료, Ctrl-C: 취소)",
+                default=card_info["birthday"],
+            ),
+            inquirer.Password(
+                "expire",
+                message="카드 유효기간 (YYMM, Enter: 완료, Ctrl-C: 취소)",
+                default=card_info["expire"],
+            ),
+        ]
+    )
+    if card_info:
+        for key, value in card_info.items():
+            keyring.set_password("card", key, value)
+        keyring.set_password("card", "ok", "1")
 
 
 def pay_card(rail, reservation) -> bool:
@@ -418,7 +388,7 @@ def pay_card(rail, reservation) -> bool:
     return False
 
 
-def login(rail_type: str = "SRT", debug: bool = False):
+def set_login(rail_type="SRT", debug=False):
     credentials = {
         "id": keyring.get_password(rail_type, "id") or "",
         "pass": keyring.get_password(rail_type, "pass") or "",
@@ -458,37 +428,18 @@ def login(rail_type: str = "SRT", debug: bool = False):
         return False
 
 
-# def login(rail_type="SRT", debug=False):
-#     if (
-#         keyring.get_password(rail_type, "id") is None
-#         or keyring.get_password(rail_type, "pass") is None
-#     ):
-#         set_login(rail_type)
+def login(rail_type="SRT", debug=False):
+    if (
+        keyring.get_password(rail_type, "id") is None
+        or keyring.get_password(rail_type, "pass") is None
+    ):
+        set_login(rail_type)
 
-#     user_id = keyring.get_password(rail_type, "id")
-#     password = keyring.get_password(rail_type, "pass")
+    user_id = keyring.get_password(rail_type, "id")
+    password = keyring.get_password(rail_type, "pass")
 
-#     rail = SRT if rail_type == "SRT" else Korail
-#     return rail(user_id, password, verbose=debug)
-
-def login(rail_type: str = "SRT", debug: bool = False):
-    """
-    JSON 에 저장된 alias 목록을 보여주고,
-    선택된 계정 정보로 Rail 인스턴스 생성·반환.
-    """
-    rail_cls = SRT if rail_type == "SRT" else Korail
-
-    # 1) alias 선택 또는 새 계정 추가 (alias 문자열 or None 반환)
-    chosen = login_menu(rail_type, debug)
-    if not chosen:
-        # 사용자가 '돌아가기'를 선택했거나 오류 발생
-        raise RuntimeError("로그인이 취소되었습니다.")
-
-    # 2) 선택된 alias 로 바로 Rail 인스턴스 생성
-    user_id, password = get_account_credentials(rail_type, chosen)
-    return (SRT if rail_type=="SRT" else Korail)(
-        user_id, password, verbose=debug
-    )
+    rail = SRT if rail_type == "SRT" else Korail
+    return rail(user_id, password, verbose=debug)
 
 
 def reserve(rail_type="SRT", debug=False):
@@ -698,19 +649,6 @@ def reserve(rail_type="SRT", debug=False):
 
     # Get seat type preference
     seat_type = SeatType if is_srt else ReserveOption
-    # q_options = [
-    #     inquirer.List(
-    #         "type",
-    #         message="선택 유형",
-    #         choices=[
-    #             ("일반실 우선", seat_type.GENERAL_FIRST),
-    #             ("일반실만", seat_type.GENERAL_ONLY),
-    #             ("특실 우선", seat_type.SPECIAL_FIRST),
-    #             ("특실만", seat_type.SPECIAL_ONLY),
-    #         ],
-    #     ),
-    #     inquirer.Confirm("pay", message="예매 시 카드 결제", default=False),
-    # ]
     q_options = [
         inquirer.List(
             "type",
@@ -722,43 +660,15 @@ def reserve(rail_type="SRT", debug=False):
                 ("특실만", seat_type.SPECIAL_ONLY),
             ],
         ),
-        inquirer.List(
-            "pay",
-            message="예매 시 카드 결제",
-            choices=[("네", True), ("아니오", False)],
-            default=False,
-        ),
+        inquirer.Confirm("pay", message="예매 시 카드 결제", default=False),
     ]
 
     options = inquirer.prompt(q_options)
     if options is None:
         print(colored("예매 정보 입력 중 취소되었습니다", "green", "on_red") + "\n")
         return
-    
-# ── 여기서 카드 결제 여부가 True 면, 미리 card_alias 선택 ──
-    pay_now = options.get("pay", False)
-    selected_card_alias = None
-    if pay_now:
-        aliases = list_card_aliases()
-        if not aliases:
-            print("등록된 카드가 없습니다. 카드 설정 메뉴에서 먼저 등록하세요.")
-            return
-        # inquirer.prompt + inquirer.List 방식으로 바꿔줍니다.
-        card_q = [
-            inquirer.List(
-                "alias",
-                message="결제할 카드 선택 (↕:이동, Enter:선택)",
-                choices=aliases,
-            )
-        ]
-        answer = inquirer.prompt(card_q)
-        if not answer or "alias" not in answer:
-            print("카드를 선택하지 않아 예매를 취소합니다.")
-            return
-        selected_card_alias = answer["alias"]
-    # ────────────────────────────────────────────────────────────────
 
-     # Reserve function
+    # Reserve function
     def _reserve(train):
         reserve = rail.reserve(train, passengers=passengers, option=options["type"])
         msg = f"{reserve}"
@@ -767,19 +677,11 @@ def reserve(rail_type="SRT", debug=False):
 
         print(colored(f"\n\n🎫 🎉 예매 성공!!! 🎉 🎫\n{msg}\n", "red", "on_green"))
 
-        # ── 미리 선택된 alias 로 바로 결제 ──
-        if pay_now and not reserve.is_waiting:
-            num, pw, bd, exp = get_card_info(selected_card_alias)
-            ok = rail.pay_with_card(
-                reserve,
-                num, pw, bd, exp,
-                0,
-                "J" if len(bd) == 6 else "S",
+        if options["pay"] and not reserve.is_waiting and pay_card(rail, reserve):
+            print(
+                colored("\n\n💳 ✨ 결제 성공!!! ✨ 💳\n\n", "green", "on_red"), end=""
             )
-            if ok:
-                print(colored("\n\n💳 ✨ 결제 성공!!! ✨ 💳\n\n", "green", "on_red"), end="")
-                msg += "\n결제 완료"
-        
+            msg += "\n결제 완료"
 
         tgprintf = get_telegram()
         asyncio.run(tgprintf(msg))
@@ -805,11 +707,7 @@ def reserve(rail_type="SRT", debug=False):
                     _reserve(trains[i])
                     return
             _sleep()
-            
-        except KeyboardInterrupt:
-            # Ctrl+C 눌렀을 때
-            print("\n🛑 예매를 중단합니다. 메인 메뉴로 돌아갑니다.")
-            return
+
         except SRTError as ex:
             msg = ex.msg
             if "정상적인 경로로 접근 부탁드립니다" in msg or isinstance(
@@ -994,58 +892,6 @@ def check_reservation(rail_type="SRT", debug=False):
             except Exception as err:
                 raise err
             return
-        
-def login_menu(rail_type: RailType, debug: bool=False) -> Optional[str]:
-    """SRT/KTX 로그인 설정: 기존 alias 선택 or 새 계정 추가"""
-    rail_cls = SRT if rail_type=="SRT" else Korail
-
-    while True:
-        # 1) 별명 목록 + 새 계정 추가
-        aliases = list_aliases(rail_type)
-        choice = inquirer.list_input(
-            message=f"{rail_type} 계정 선택",
-            choices=aliases + ["➕ 새 계정 추가", "돌아가기"]
-        )
-        if choice in (None, "돌아가기"):
-            return None
-
-        # 2) 새 계정 추가 흐름
-        if choice == "➕ 새 계정 추가":
-            # 순차 입력
-            info = inquirer.prompt([
-                inquirer.Text("id", message="아이디"),
-                inquirer.Password("pw", message="비밀번호"),
-                inquirer.Text("alias", message="별명"),
-            ])
-            if not info:
-                return False
-            uid, pwd, alias = info["id"], info["pw"], info["alias"]
-
-            # 로그인 테스트
-            try:
-                rail_cls(uid, pwd, verbose=debug)
-            except Exception as err:
-                print(f"로그인 실패: {err}")
-                if inquirer.confirm("다시 시도하시겠습니까?", default=True):
-                    continue
-                return False
-
-            # 저장 및 최상단 노출
-            add_account(rail_type, alias, uid, pwd)
-            print("✅ 저장 완료!")
-            # loop 돌면서 방금 추가한 alias가 제일 앞에 뜹니다.
-            continue
-
-        # 3) 기존 alias 선택 → 로그인 시도
-        try:
-            uid, pwd = get_account_credentials(rail_type, choice)
-            rail_cls(uid, pwd, verbose=debug)
-            print(f"✅ '{choice}' 계정으로 로그인 성공")
-            return choice
-        except Exception as err:
-            print(f"로그인 오류: {err}")
-            return None
-
 
 
 if __name__ == "__main__":
