@@ -12,6 +12,7 @@ import keyring
 import telegram
 import time
 import re
+from . import scheduler 
 
 from .ktx import (
     Korail,
@@ -151,7 +152,7 @@ def srtgo(debug=False):
     ]
 
     ACTIONS = {
-        1: lambda rt: reserve(rt, debug),
+        1: lambda rt: pre_check_reserve(rt, debug), 
         2: lambda rt: check_reservation(rt, debug),
         3: lambda rt: login_menu(rt, debug),
         4: lambda _: set_telegram(),
@@ -183,7 +184,21 @@ def srtgo(debug=False):
         action = ACTIONS.get(choice)
         if action:
             action(rail_type)
+            
+def pre_check_reserve(rail_type, debug):
+    """
+    예매 시작 전, '바로 예매'인지 '예약 실행'인지 선택
+    """
+    mode = inquirer.list_input(
+        message="예매 방식을 선택하세요",
+        choices=[
+            ("🚀 바로 예매 (지금 즉시 시작)", False),    # False 반환
+            ("⏰ 예약 실행 (설정 후 특정 시간에 시작)", True) # True 반환
+        ]
+    )
 
+    # 선택한 모드(True/False)를 reserve 함수로 전달
+    reserve(rail_type, debug, is_schedule_mode=mode)
 
 def set_station(rail_type: RailType) -> bool:
     stations, default_station_key = get_station(rail_type)
@@ -471,15 +486,20 @@ def login(rail_type: str = "SRT", debug: bool = False):
 #     rail = SRT if rail_type == "SRT" else Korail
 #     return rail(user_id, password, verbose=debug)
 
-def login(rail_type: str = "SRT", debug: bool = False):
+def login(rail_type: str = "SRT", debug: bool = False, auto_alias: str = None): # [수정] auto_alias 추가
     """
     JSON 에 저장된 alias 목록을 보여주고,
     선택된 계정 정보로 Rail 인스턴스 생성·반환.
     """
     rail_cls = SRT if rail_type == "SRT" else Korail
 
-    # 1) alias 선택 또는 새 계정 추가 (alias 문자열 or None 반환)
-    chosen = login_menu(rail_type, debug)
+    # [추가] 자동 로그인 모드일 경우 메뉴 스킵
+    if auto_alias:
+        chosen = auto_alias
+    else:
+        # 1) alias 선택 또는 새 계정 추가 (alias 문자열 or None 반환)
+        chosen = login_menu(rail_type, debug)
+
     if not chosen:
         # 사용자가 '돌아가기'를 선택했거나 오류 발생
         raise RuntimeError("로그인이 취소되었습니다.")
@@ -491,11 +511,35 @@ def login(rail_type: str = "SRT", debug: bool = False):
     )
 
 
-def reserve(rail_type="SRT", debug=False):
-    rail = login(rail_type, debug=debug)
+# [수정] 인자 변경: scheduled_dt -> is_schedule_mode (기본값 False)
+def reserve(rail_type="SRT", debug=False, is_schedule_mode=False):
+    # 1. 재로그인을 위해 계정 정보를 미리 확보
+    current_alias = login_menu(rail_type, debug)
+    if not current_alias:
+        return
+
+    # 2. 로그인 수행
+    user_id, password = get_account_credentials(rail_type, current_alias)
+    rail = (SRT if rail_type == "SRT" else Korail)(user_id, password, verbose=debug)
+    
     is_srt = rail_type == "SRT"
 
-    # Get date, time, stations, and passenger info
+    # --- (기존 입력 로직 생략 없이 그대로 유지) ---
+    # ... departure, arrival, date, time, adult 등 defaults 설정 ...
+    # ... stations, station_key 가져오기 ...
+    # ... date_choices, time_choices 생성 ...
+    # ... q_info 생성 및 inquirer.prompt 실행 ...
+    # ... info 검증 및 keyring 저장 ...
+    # ... passengers 리스트 생성 ...
+    # ... search_train 및 열차 선택 ...
+    # ... 좌석 타입 및 카드 결제 여부(options) 선택 ...
+    # ... pay_now 및 selected_card_alias 설정 ...
+    
+    # (위쪽 코드는 기존과 완전히 동일하므로 생략했습니다. 카드 선택 부분까지 쭉 진행됩니다.)
+
+    # =========================================================================
+    # [기존 코드의 이 부분부터 수정/추가 됩니다]
+    # 카드 선택 로직 (기존 코드 참고용)
     now = datetime.now() + timedelta(minutes=10)
     today = now.strftime("%Y%m%d")
     this_time = now.strftime("%H%M%S")
@@ -513,7 +557,6 @@ def reserve(rail_type="SRT", debug=False):
         "disability4to6": int(keyring.get_password(rail_type, "disability4to6") or 0),
     }
 
-    # Set default stations if departure equals arrival
     if defaults["departure"] == defaults["arrival"]:
         defaults["arrival"] = (
             "동대구" if defaults["departure"] in ("수서", "서울") else None
@@ -527,7 +570,6 @@ def reserve(rail_type="SRT", debug=False):
     stations, station_key = get_station(rail_type)
     options = get_options()
 
-    # Generate date and time choices
     date_choices = [
         (
             (now + timedelta(days=i)).strftime("%Y/%m/%d %a"),
@@ -537,7 +579,6 @@ def reserve(rail_type="SRT", debug=False):
     ]
     time_choices = [(f"{h:02d}", f"{h:02d}0000") for h in range(24)]
 
-    # Build inquirer questions
     q_info = [
         inquirer.List(
             "departure",
@@ -594,7 +635,6 @@ def reserve(rail_type="SRT", debug=False):
         passenger_classes["disability4to6"]: "4~6급 장애인",
     }
 
-    # Add passenger type questions if enabled in options
     for key, label in passenger_types.items():
         if key in options:
             q_info.append(
@@ -608,7 +648,6 @@ def reserve(rail_type="SRT", debug=False):
 
     info = inquirer.prompt(q_info)
 
-    # Validate input info
     if not info:
         print(colored("예매 정보 입력 중 취소되었습니다", "green", "on_red") + "\n")
         return
@@ -617,15 +656,12 @@ def reserve(rail_type="SRT", debug=False):
         print(colored("출발역과 도착역이 같습니다", "green", "on_red") + "\n")
         return
 
-    # Save preferences
     for key, value in info.items():
         keyring.set_password(rail_type, key, str(value))
 
-    # Adjust time if needed
     if info["date"] == today and int(info["time"]) < int(this_time):
         info["time"] = this_time
 
-    # Build passenger list
     passengers = []
     total_count = 0
     for key, cls in passenger_classes.items():
@@ -633,7 +669,6 @@ def reserve(rail_type="SRT", debug=False):
             passengers.append(cls(info[key]))
             total_count += info[key]
 
-    # Validate passenger count
     if not passengers:
         print(colored("승객수는 0이 될 수 없습니다", "green", "on_red") + "\n")
         return
@@ -648,7 +683,6 @@ def reserve(rail_type="SRT", debug=False):
     ]
     print(*msg_passengers)
 
-    # Search for trains
     params = {
         "dep": info["departure"],
         "arr": info["arrival"],
@@ -679,7 +713,6 @@ def reserve(rail_type="SRT", debug=False):
         print(colored("예약 가능한 열차가 없습니다", "green", "on_red") + "\n")
         return
 
-    # Get train selection
     q_choice = [
         inquirer.Checkbox(
             "trains",
@@ -696,21 +729,7 @@ def reserve(rail_type="SRT", debug=False):
 
     n_trains = len(choice["trains"])
 
-    # Get seat type preference
     seat_type = SeatType if is_srt else ReserveOption
-    # q_options = [
-    #     inquirer.List(
-    #         "type",
-    #         message="선택 유형",
-    #         choices=[
-    #             ("일반실 우선", seat_type.GENERAL_FIRST),
-    #             ("일반실만", seat_type.GENERAL_ONLY),
-    #             ("특실 우선", seat_type.SPECIAL_FIRST),
-    #             ("특실만", seat_type.SPECIAL_ONLY),
-    #         ],
-    #     ),
-    #     inquirer.Confirm("pay", message="예매 시 카드 결제", default=False),
-    # ]
     q_options = [
         inquirer.List(
             "type",
@@ -735,7 +754,6 @@ def reserve(rail_type="SRT", debug=False):
         print(colored("예매 정보 입력 중 취소되었습니다", "green", "on_red") + "\n")
         return
     
-# ── 여기서 카드 결제 여부가 True 면, 미리 card_alias 선택 ──
     pay_now = options.get("pay", False)
     selected_card_alias = None
     if pay_now:
@@ -743,7 +761,7 @@ def reserve(rail_type="SRT", debug=False):
         if not aliases:
             print("등록된 카드가 없습니다. 카드 설정 메뉴에서 먼저 등록하세요.")
             return
-        # inquirer.prompt + inquirer.List 방식으로 바꿔줍니다.
+        
         card_q = [
             inquirer.List(
                 "alias",
@@ -756,9 +774,35 @@ def reserve(rail_type="SRT", debug=False):
             print("카드를 선택하지 않아 예매를 취소합니다.")
             return
         selected_card_alias = answer["alias"]
-    # ────────────────────────────────────────────────────────────────
+        
+    # =========================================================================
+    # [수정된 부분] 설정 완료 후 예약 모드 처리 및 종료 여부 확인
+    
+    should_shutdown = False
 
-     # Reserve function
+    if is_schedule_mode:
+        # 1. 예약 시간 선택 (설정이 끝난 현재 시점 기준)
+        scheduled_dt = scheduler.select_schedule_time()
+        if not scheduled_dt:
+            print("예약 실행이 취소되었습니다.")
+            return
+        
+        # 2. 종료 여부 묻기
+        should_shutdown = scheduler.ask_shutdown()
+
+        # 3. 대기
+        scheduler.wait_until(scheduled_dt)
+        
+        # 4. 재로그인
+        print("\n🔄 세션 갱신을 위해 재로그인을 시도합니다...")
+        try:
+            rail = (SRT if rail_type == "SRT" else Korail)(user_id, password, verbose=debug)
+            print("✅ 재로그인 성공! 예매를 시작합니다.")
+        except Exception as e:
+            print(f"❌ 재로그인 실패: {e}")
+            return
+    # =========================================================================
+
     def _reserve(train):
         reserve = rail.reserve(train, passengers=passengers, option=options["type"])
         msg = f"{reserve}"
@@ -767,7 +811,6 @@ def reserve(rail_type="SRT", debug=False):
 
         print(colored(f"\n\n🎫 🎉 예매 성공!!! 🎉 🎫\n{msg}\n", "red", "on_green"))
 
-        # ── 미리 선택된 alias 로 바로 결제 ──
         if pay_now and not reserve.is_waiting:
             num, pw, bd, exp = get_card_info(selected_card_alias)
             ok = rail.pay_with_card(
@@ -779,12 +822,15 @@ def reserve(rail_type="SRT", debug=False):
             if ok:
                 print(colored("\n\n💳 ✨ 결제 성공!!! ✨ 💳\n\n", "green", "on_red"), end="")
                 msg += "\n결제 완료"
-        
 
         tgprintf = get_telegram()
         asyncio.run(tgprintf(msg))
+        
+        # [추가] 예약 성공 시 종료 옵션이 켜져있으면 컴퓨터 종료
+        if should_shutdown:
+            scheduler.shutdown_computer()
 
-    # Reservation loop
+    # Reservation loop (기존과 동일)
     i_try = 0
     start_time = time.time()
     while True:
@@ -807,7 +853,6 @@ def reserve(rail_type="SRT", debug=False):
             _sleep()
             
         except KeyboardInterrupt:
-            # Ctrl+C 눌렀을 때
             print("\n🛑 예매를 중단합니다. 메인 메뉴로 돌아갑니다.")
             return
         except SRTError as ex:
@@ -816,16 +861,16 @@ def reserve(rail_type="SRT", debug=False):
                 ex, SRTNetFunnelError
             ):
                 if debug:
-                    print(
-                        f"\nException: {ex}\nType: {type(ex)}\nArgs: {ex.args}\nMessage: {msg}"
-                    )
+                    print(f"\nException: {ex}\nType: {type(ex)}\nArgs: {ex.args}\nMessage: {msg}")
                 rail.clear()
             elif "로그인 후 사용하십시오" in msg:
                 if debug:
-                    print(
-                        f"\nException: {ex}\nType: {type(ex)}\nArgs: {ex.args}\nMessage: {msg}"
-                    )
-                rail = login(rail_type, debug=debug)
+                    print(f"\nException: {ex}\nType: {type(ex)}\nArgs: {ex.args}\nMessage: {msg}")
+                try:
+                     rail = (SRT if rail_type == "SRT" else Korail)(user_id, password, verbose=debug)
+                except:
+                     pass
+
                 if not rail.is_login and not _handle_error(ex):
                     return
             elif not any(
@@ -844,7 +889,10 @@ def reserve(rail_type="SRT", debug=False):
         except KorailError as ex:
             msg = ex.msg
             if "Need to Login" in msg:
-                rail = login(rail_type, debug=debug)
+                try:
+                     rail = (SRT if rail_type == "SRT" else Korail)(user_id, password, verbose=debug)
+                except:
+                     pass
                 if not rail.is_login and not _handle_error(ex):
                     return
             elif not any(
@@ -857,23 +905,30 @@ def reserve(rail_type="SRT", debug=False):
 
         except JSONDecodeError as ex:
             if debug:
-                print(
-                    f"\nException: {ex}\nType: {type(ex)}\nArgs: {ex.args}\nMessage: {ex.msg}"
-                )
+                print(f"\nException: {ex}\nType: {type(ex)}\nArgs: {ex.args}\nMessage: {ex.msg}")
             _sleep()
-            rail = login(rail_type, debug=debug)
+            try:
+                 rail = (SRT if rail_type == "SRT" else Korail)(user_id, password, verbose=debug)
+            except:
+                 pass
 
         except ConnectionError as ex:
             if not _handle_error(ex, "연결이 끊겼습니다"):
                 return
-            rail = login(rail_type, debug=debug)
+            try:
+                 rail = (SRT if rail_type == "SRT" else Korail)(user_id, password, verbose=debug)
+            except:
+                 pass
 
         except Exception as ex:
             if debug:
                 print("\nUndefined exception")
             if not _handle_error(ex):
                 return
-            rail = login(rail_type, debug=debug)
+            try:
+                 rail = (SRT if rail_type == "SRT" else Korail)(user_id, password, verbose=debug)
+            except:
+                 pass
 
 
 def _sleep():
