@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:path_provider/path_provider.dart';
+import 'session_exception.dart'; // Added Import
 
 const String kUserAgent =
     "Mozilla/5.0 (Linux; Android 15; SM-S912N Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/136.0.7103.125 Mobile Safari/537.36SRT-APP-Android V.2.0.38";
@@ -36,11 +37,28 @@ class HttpClient {
 
     _dio.interceptors.add(CookieManager(_cookieJar));
     
+    // [Centralized Session Monitor Interceptor]
+    _dio.interceptors.add(InterceptorsWrapper(
+      onResponse: (response, handler) {
+        final dataStr = response.data.toString();
+        if (dataStr.contains("로그인 후 사용")) {
+          return handler.reject(
+            DioException(
+              requestOptions: response.requestOptions,
+              error: SessionExpiredException("로그인이 필요합니다."),
+              type: DioExceptionType.unknown,
+            ),
+          );
+        }
+        return handler.next(response);
+      },
+    ));
+    
     // Debug Logging
     _dio.interceptors.add(LogInterceptor(
       requestBody: true,
       responseBody: true,
-      logPrint: (obj) => print('Network: $obj'), // Simple print for CLI
+      logPrint: (obj) => print('Network: $obj'),
     ));
   }
 

@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'dart:math';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +7,9 @@ import 'package:srtgo_mobile/features/reservation/data/models/train_model.dart';
 import '../data/srt_reservation_repository.dart';
 import '../data/srt_train_repository.dart';
 import '../../auth/presentation/logic/user_provider.dart';
+import '../../auth/data/repositories/auth_repository_impl.dart'; // Added Import
+import '../../../core/network/session_exception.dart'; // Corrected Path
+import '../../../core/storage/credential_storage.dart'; // Corrected Path
 import '../../home/presentation/logic/home_providers.dart';
 import '../../tickets/presentation/logic/tickets_provider.dart';
 import '../../tickets/data/repositories/srt_ticket_repository.dart';
@@ -296,7 +300,14 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
       _macroStatus = "🔄 세션 갱신을 위해 재로그인 중...";
       onUpdate(0, _macroStatus);
       try {
-        // Simple session refresh placeholder
+        final storage = CredentialStorage();
+        final lastType = await storage.getLastRailType();
+        if (lastType != null) {
+          final creds = await storage.getCredentials(lastType);
+          if (creds != null) {
+            await ref.read(authRepositoryProvider).login(creds['username']!, creds['password']!);
+          }
+        }
       } catch (_) {}
     }
 
@@ -304,7 +315,10 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
       limitEndTime = DateTime.now().add(Duration(minutes: widget.durationMinutes));
     }
 
+    int reloginAttempts = 0;
+
     while (_isMacroRunning) {
+      // 3. Duration Check
       if (limitEndTime != null && DateTime.now().isAfter(limitEndTime)) {
         _macroStatus = "🛑 설정한 예매 지속 시간(${widget.durationMinutes}분)이 지났습니다.";
         onUpdate(_macroTryCount, _macroStatus);
@@ -343,6 +357,9 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
           time: target.depTime,
         );
 
+        // Reset relogin attempts on successful request
+        reloginAttempts = 0;
+
         final freshTarget = trains.firstWhere(
           (t) => t.trainNo == target.trainNo,
           orElse: () => target,
@@ -361,6 +378,52 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
         final delayMs = _getHumanDelay();
         await Future.delayed(Duration(milliseconds: delayMs));
       } catch (e) {
+        bool isSessionError = false;
+        if (e is DioException && e.error is SessionExpiredException) {
+          isSessionError = true;
+        } else if (e.toString().contains("로그인")) {
+          isSessionError = true;
+        }
+
+        if (isSessionError) {
+          if (reloginAttempts >= 1) {
+            _macroStatus = "❌ 재로그인 실패. 로그아웃 처리합니다.";
+            onUpdate(_macroTryCount, _macroStatus);
+            _isMacroRunning = false;
+            // Force logout / Go to login
+            if (mounted) {
+               Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+            }
+            return;
+          }
+
+          _macroStatus = "🔑 세션 만료 감지. 자동 재로그인 시도 중...";
+          onUpdate(_macroTryCount, _macroStatus);
+          
+          try {
+            reloginAttempts++;
+            final storage = CredentialStorage();
+            final lastType = await storage.getLastRailType();
+            if (lastType != null) {
+              final creds = await storage.getCredentials(lastType);
+              if (creds != null) {
+                await ref.read(authRepositoryProvider).login(creds['username']!, creds['password']!);
+                _macroStatus = "✅ 재로그인 성공. 다시 예매를 시작합니다.";
+                onUpdate(_macroTryCount, _macroStatus);
+                continue; // Retry immediately
+              }
+            }
+          } catch (reloginError) {
+            _macroStatus = "❌ 재로그인 오류. 로그아웃 처리합니다.";
+            onUpdate(_macroTryCount, _macroStatus);
+            _isMacroRunning = false;
+            if (mounted) {
+               Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+            }
+            return;
+          }
+        }
+
         _macroStatus = "오류 발생. 재시도...";
         onUpdate(_macroTryCount, _macroStatus);
         await Future.delayed(const Duration(seconds: 1));
