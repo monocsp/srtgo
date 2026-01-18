@@ -511,7 +511,6 @@ def login(rail_type: str = "SRT", debug: bool = False, auto_alias: str = None): 
     )
 
 
-# [수정] 인자 변경: scheduled_dt -> is_schedule_mode (기본값 False)
 def reserve(rail_type="SRT", debug=False, is_schedule_mode=False):
     # 1. 재로그인을 위해 계정 정보를 미리 확보
     current_alias = login_menu(rail_type, debug)
@@ -524,22 +523,7 @@ def reserve(rail_type="SRT", debug=False, is_schedule_mode=False):
     
     is_srt = rail_type == "SRT"
 
-    # --- (기존 입력 로직 생략 없이 그대로 유지) ---
-    # ... departure, arrival, date, time, adult 등 defaults 설정 ...
-    # ... stations, station_key 가져오기 ...
-    # ... date_choices, time_choices 생성 ...
-    # ... q_info 생성 및 inquirer.prompt 실행 ...
-    # ... info 검증 및 keyring 저장 ...
-    # ... passengers 리스트 생성 ...
-    # ... search_train 및 열차 선택 ...
-    # ... 좌석 타입 및 카드 결제 여부(options) 선택 ...
-    # ... pay_now 및 selected_card_alias 설정 ...
-    
-    # (위쪽 코드는 기존과 완전히 동일하므로 생략했습니다. 카드 선택 부분까지 쭉 진행됩니다.)
-
-    # =========================================================================
-    # [기존 코드의 이 부분부터 수정/추가 됩니다]
-    # 카드 선택 로직 (기존 코드 참고용)
+    # --- (기존 입력 로직 유지) ---
     now = datetime.now() + timedelta(minutes=10)
     today = now.strftime("%Y%m%d")
     this_time = now.strftime("%H%M%S")
@@ -776,24 +760,35 @@ def reserve(rail_type="SRT", debug=False, is_schedule_mode=False):
         selected_card_alias = answer["alias"]
         
     # =========================================================================
-    # [수정된 부분] 설정 완료 후 예약 모드 처리 및 종료 여부 확인
-    
-    should_shutdown = False
+    # [수정된 부분] 1. 예매 지속 시간(Duration) 선택
+    duration_mins = scheduler.select_duration() # 0이면 무제한, 그외 분 단위
 
+    scheduled_dt = None
+    should_shutdown = False
+    
+    # [수정] 2. 종료 여부는 시간 선택 직후에 한 번만 물어봅니다. (성공이든 시간초과든 종료할지)
+    should_shutdown = scheduler.ask_shutdown()
+
+    # 3. 예약 모드 처리
     if is_schedule_mode:
-        # 1. 예약 시간 선택 (설정이 끝난 현재 시점 기준)
+        # 3-1. 예약 시간 선택
         scheduled_dt = scheduler.select_schedule_time()
         if not scheduled_dt:
             print("예약 실행이 취소되었습니다.")
             return
         
-        # 2. 종료 여부 묻기
-        should_shutdown = scheduler.ask_shutdown()
+        # 3-2. 메시지 출력 (예약 모드)
+        start_str = scheduled_dt.strftime('%H:%M:%S')
+        print(colored("\n[예약 대기 설정]", "cyan"))
+        if duration_mins > 0:
+            end_dt = scheduled_dt + timedelta(minutes=duration_mins)
+            end_str = end_dt.strftime('%H:%M:%S')
+            print(f"⏰ {start_str}에 시작해서 {duration_mins}분 동안 예매예정 ({end_str} 예상 종료).")
+        else:
+            print(f"⏰ {start_str}부터 예매를 시작합니다 (무제한).")
 
-        # 3. 대기
+        # 3-3. 대기 및 재로그인
         scheduler.wait_until(scheduled_dt)
-        
-        # 4. 재로그인
         print("\n🔄 세션 갱신을 위해 재로그인을 시도합니다...")
         try:
             rail = (SRT if rail_type == "SRT" else Korail)(user_id, password, verbose=debug)
@@ -801,6 +796,27 @@ def reserve(rail_type="SRT", debug=False, is_schedule_mode=False):
         except Exception as e:
             print(f"❌ 재로그인 실패: {e}")
             return
+    
+    else:
+        # 4. 즉시 모드 메시지 출력
+        now_dt = datetime.now()
+        start_str = now_dt.strftime('%H:%M:%S')
+        print(colored("\n[즉시 예매 설정]", "cyan"))
+        if duration_mins > 0:
+            end_dt = now_dt + timedelta(minutes=duration_mins)
+            end_str = end_dt.strftime('%H:%M:%S')
+            print(f"🚀 현재시간({start_str})부터 {duration_mins}분 동안 예매예정 ({end_str} 예상 종료).")
+        else:
+            print(f"🚀 현재시간({start_str})부터 예매를 실행합니다 (무제한).")
+
+    # 예매 종료 시간 계산
+    limit_end_time = None
+    if duration_mins > 0:
+        if is_schedule_mode and scheduled_dt:
+            limit_end_time = scheduled_dt + timedelta(minutes=duration_mins)
+        else:
+            limit_end_time = datetime.now() + timedelta(minutes=duration_mins)
+
     # =========================================================================
 
     def _reserve(train):
@@ -826,15 +842,24 @@ def reserve(rail_type="SRT", debug=False, is_schedule_mode=False):
         tgprintf = get_telegram()
         asyncio.run(tgprintf(msg))
         
-        # [추가] 예약 성공 시 종료 옵션이 켜져있으면 컴퓨터 종료
+        # [수정] 성공 시에도 종료 옵션 체크
         if should_shutdown:
             scheduler.shutdown_computer()
 
-    # Reservation loop (기존과 동일)
+    # Reservation loop
     i_try = 0
     start_time = time.time()
     while True:
         try:
+            # [수정] 시간 제한 체크 (타임아웃 시에도 종료 옵션 체크)
+            if limit_end_time and datetime.now() > limit_end_time:
+                print(colored(f"\n\n🛑 설정한 예매 지속 시간({duration_mins}분)이 지났습니다. 예매를 종료합니다.", "yellow"))
+                
+                # 타임아웃 종료 시에도 컴퓨터 종료 실행
+                if should_shutdown:
+                    scheduler.shutdown_computer()
+                return
+
             i_try += 1
             elapsed_time = time.time() - start_time
             hours, remainder = divmod(int(elapsed_time), 3600)

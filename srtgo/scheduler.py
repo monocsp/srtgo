@@ -27,26 +27,48 @@ def shutdown_computer():
     # 종료 명령 실행
     if system_name == "Windows":
         os.system("shutdown /s /t 1")
-    elif system_name == "Darwin": # Mac (수정됨)
-        # Mac에서는 shutdown 명령어 대신 AppleScript를 사용하여 권한 문제 우회
+    elif system_name == "Darwin": # Mac
         os.system("osascript -e 'tell application \"System Events\" to shut down'")
     elif system_name == "Linux":
-        # 리눅스는 보통 sudo가 필요하지만, 사용자가 설정했을 경우를 대비해 시도
         os.system("shutdown -h now")
     else:
         print("알 수 없는 운영체제라 종료하지 못했습니다.")
 
 def ask_shutdown():
-    """예매 완료 후 컴퓨터 종료 여부를 묻습니다."""
+    """예매 완료(성공 또는 시간초과) 후 컴퓨터 종료 여부를 묻습니다."""
     q = [
         inquirer.Confirm(
             "shutdown",
-            message="🎉 예매 성공 후 컴퓨터를 자동으로 종료하시겠습니까?",
+            message="🎉 작업 완료(예매 성공 또는 시간 초과) 후 컴퓨터를 자동으로 종료하시겠습니까?",
             default=False
         )
     ]
     ans = inquirer.prompt(q)
     return ans["shutdown"] if ans else False
+
+def select_duration():
+    """
+    예매 시도 시간을 선택합니다. (무제한 또는 10분~600분)
+    반환값: 분 단위 정수 (0은 무제한)
+    """
+    choices = [("♾️  될 때까지 예매하기 (시간 제한 없음)", 0)]
+    
+    # 10분부터 600분(10시간)까지 10분 단위
+    for m in range(10, 610, 10):
+        hours, mins = divmod(m, 60)
+        label = ""
+        if hours > 0:
+            label += f"{hours}시간"
+        if mins > 0:
+            label += f" {mins}분"
+        elif hours == 0 and mins > 0:
+            label += f"{mins}분"
+            
+        choices.append((f"{label} 동안 예매하기", m))
+
+    q = [inquirer.List("duration", message="최대 얼마동안 예매를 시도할까요?", choices=choices)]
+    ans = inquirer.prompt(q)
+    return ans["duration"] if ans else 0
 
 def select_schedule_time():
     """
@@ -61,11 +83,9 @@ def select_schedule_time():
     choices.append((f"⏱️  설정 완료 후 10분 뒤 시작 ({ (now + timedelta(minutes=10)).strftime('%H:%M') })", now + timedelta(minutes=10)))
 
     # 2. 절대 시간 옵션 (5분 단위 정각)
-    # 현재 시간 기준 다음 5분 단위 찾기
     next_tick_min = (now.minute // 5 + 1) * 5
     next_tick = now.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=next_tick_min)
     
-    # 만약 계산된 정각이 현재보다 과거거나 너무 가까우면 보정
     if next_tick <= now:
         next_tick += timedelta(minutes=5)
 
@@ -103,7 +123,6 @@ def wait_until(target_time):
             print(colored("\n🚀 예약 시간이 되었습니다! 예매를 시작합니다.", "green", "on_red"))
             break
 
-        # 남은 시간 표시
         hours, rem = divmod(int(remaining.total_seconds()), 3600)
         minutes, seconds = divmod(rem, 60)
         time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
