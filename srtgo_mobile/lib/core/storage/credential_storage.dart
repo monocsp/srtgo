@@ -24,6 +24,8 @@ class CredentialStorage {
       await _storage.write(key: _keyKtxId, value: username);
       await _storage.write(key: _keyKtxPw, value: password);
     }
+    // Also save password with specific ID key for reliable recovery
+    await _storage.write(key: 'pw_$username', value: password);
     await _storage.write(key: _keyLastType, value: railType);
   }
 
@@ -39,6 +41,15 @@ class CredentialStorage {
 
     if (id != null && pw != null) {
       return {'username': id, 'password': pw};
+    }
+    return null;
+  }
+
+  // [New] Get specific password for an ID
+  Future<Map<String, String>?> getCredentialsById(String username) async {
+    final pw = await _storage.read(key: 'pw_$username');
+    if (pw != null) {
+      return {'username': username, 'password': pw};
     }
     return null;
   }
