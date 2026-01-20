@@ -490,6 +490,7 @@ class _ReservationScreenState extends ConsumerState<ReservationScreen> {
                           const DropdownMenuItem(value: 30, child: Text("30분")),
                           const DropdownMenuItem(value: 60, child: Text("1시간")),
                           const DropdownMenuItem(value: 120, child: Text("2시간")),
+                          const DropdownMenuItem(value: 180, child: Text("3시간")),
                           const DropdownMenuItem(value: 300, child: Text("5시간")),
                         ],
                       ),
