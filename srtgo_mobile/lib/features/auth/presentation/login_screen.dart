@@ -8,7 +8,9 @@ import 'logic/user_provider.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   final String? initialRailType; // "SRT" or "KTX"
-  const LoginScreen({super.key, this.initialRailType});
+  final String? initialId;
+  final String? errorMessage;
+  const LoginScreen({super.key, this.initialRailType, this.initialId, this.errorMessage});
 
   @override
   ConsumerState<LoginScreen> createState() => _LoginScreenState();
@@ -37,6 +39,29 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       _isKtxSelected = false;
     } else {
       _isKtxSelected = false; // Default
+    }
+    
+    if (widget.initialId != null) {
+      _idController.text = widget.initialId!;
+    }
+    
+    if (widget.errorMessage != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(widget.errorMessage!),
+            backgroundColor: Colors.red,
+            duration: const Duration(days: 365), // Persistent
+            action: SnackBarAction(
+              label: '닫기',
+              textColor: Colors.white,
+              onPressed: () {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              },
+            ),
+          ),
+        );
+      });
     }
   }
 

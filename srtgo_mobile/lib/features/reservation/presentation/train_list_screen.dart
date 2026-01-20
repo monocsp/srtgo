@@ -77,8 +77,8 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
     }
   }
 
-  Future<void> _attemptReserve(Train train) async {
-    setState(() => _isReserving = true);
+  Future<void> _attemptReserve(Train train, {bool isFromMacro = false}) async {
+    if (mounted) setState(() => _isReserving = true);
 
     bool isStandby = false;
     bool preferSpecial = false;
@@ -115,6 +115,81 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
     }
 
     try {
+      await _performReservation(train, isStandby, preferSpecial);
+    } catch (e) {
+      // Check for Login Required Error
+      if (e.toString().contains("로그인") || (e is DioException && e.error is SessionExpiredException)) {
+        String? failedId;
+        try {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("세션 만료. 재로그인 시도 중..."), duration: Duration(seconds: 1)),
+            );
+          }
+          
+          final storage = CredentialStorage();
+          final userState = ref.read(userProvider);
+          final currentUser = userState.currentUser;
+          
+          if (currentUser != null) {
+            failedId = currentUser.membershipNumber;
+            final creds = await storage.getCredentialsById(currentUser.membershipNumber);
+            if (creds != null) {
+              await ref.read(authRepositoryProvider).login(creds['username']!, creds['password']!);
+              
+              // Retry Reservation
+              try {
+                await _performReservation(train, isStandby, preferSpecial);
+                return; // Success
+              } catch (retryError) {
+                 if (isFromMacro) {
+                    // If macro, don't fail, just resume searching
+                    if (mounted) {
+                       ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text("재시도 실패 (${retryError.toString().replaceAll("Exception: ", "")})... 매크로 재개"), duration: const Duration(seconds: 1)),
+                       );
+                       // Resume Macro Loop
+                       _showMacroDialog(train);
+                       return;
+                    }
+                 }
+                 rethrow; // Manual mode -> show error
+              }
+            }
+          }
+        } catch (reloginError) {
+           // Fatal Re-login Failure
+           if (mounted) {
+             // Navigate to Login with Error & ID
+             Navigator.of(context).pushAndRemoveUntil(
+               MaterialPageRoute(
+                 builder: (context) => LoginScreen(
+                   initialRailType: "SRT", // Assume SRT for now as this is SRT logic
+                   initialId: failedId,
+                   errorMessage: "로그인에 실패하여 로그아웃되었습니다.",
+                 )
+               ),
+               (route) => false,
+             );
+             return;
+           }
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceAll("Exception: ", "")),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isReserving = false);
+    }
+  }
+
+  Future<void> _performReservation(Train train, bool isStandby, bool preferSpecial) async {
       final reservationResult = await _reserveRepo.reserve(
         train: train,
         passengers: widget.passengerCounts,
@@ -131,6 +206,9 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
           final userState = ref.read(userProvider);
           final currentUser = userState.currentUser;
           if (currentUser == null) throw Exception("로그인 정보가 없습니다.");
+
+          // Wait a bit before fetching tickets to ensure backend update
+          await Future.delayed(const Duration(milliseconds: 500));
 
           final tickets = await _ticketRepo.fetchTickets();
           final ticket = tickets.firstWhere(
@@ -176,18 +254,6 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
           ],
         ),
       );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString().replaceAll("Exception: ", "")),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isReserving = false);
-    }
   }
 
   void _showMacroDialog(Train targetTrain) {
@@ -328,7 +394,7 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
           onUpdate(_macroTryCount, _macroStatus);
           _isMacroRunning = false;
           Navigator.pop(context);
-          await _attemptReserve(freshTarget);
+          await _attemptReserve(freshTarget, isFromMacro: true); // Pass true
           return;
         }
         await Future.delayed(Duration(milliseconds: _getHumanDelay()));
@@ -340,6 +406,7 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
             _macroStatus = "❌ 재로그인 실패. 로그아웃 처리합니다.";
             onUpdate(_macroTryCount, _macroStatus);
             _isMacroRunning = false;
+            // Add ID passing here if needed, but existing logic handles it roughly
             if (mounted) Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
             return;
           }
