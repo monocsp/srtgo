@@ -8,6 +8,7 @@ import '../data/srt_reservation_repository.dart';
 import '../data/srt_train_repository.dart';
 import '../../auth/presentation/logic/user_provider.dart';
 import '../../auth/data/repositories/auth_repository_impl.dart';
+import '../../auth/presentation/login_screen.dart'; // Added Import
 import '../../../core/network/session_exception.dart';
 import '../../../core/storage/credential_storage.dart';
 import '../../home/presentation/logic/home_providers.dart';
@@ -20,7 +21,7 @@ class TrainListScreen extends ConsumerStatefulWidget {
   final String title;
   final Map<String, int> passengerCounts;
   final CreditCard? paymentCard;
-  final SeatOption seatOption; 
+  final SeatOption seatOption;
   final bool useSchedule;
   final TimeOfDay? scheduledTime;
   final int durationMinutes;
@@ -31,7 +32,7 @@ class TrainListScreen extends ConsumerStatefulWidget {
     required this.title,
     required this.passengerCounts,
     this.paymentCard,
-    required this.seatOption, 
+    required this.seatOption,
     this.useSchedule = false,
     this.scheduledTime,
     this.durationMinutes = 0,
@@ -50,6 +51,7 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
   bool _isMacroRunning = false;
   int _macroTryCount = 0;
   String _macroStatus = "시작하는 중...";
+  int _macroLoopId = 0;
 
   // Helper to check availability based on option
   bool _canReserve(Train train) {
@@ -118,61 +120,75 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
       await _performReservation(train, isStandby, preferSpecial);
     } catch (e) {
       // Check for Login Required Error
-      if (e.toString().contains("로그인") || (e is DioException && e.error is SessionExpiredException)) {
+      if (e.toString().contains("로그인") ||
+          (e is DioException && e.error is SessionExpiredException)) {
         String? failedId;
         try {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("세션 만료. 재로그인 시도 중..."), duration: Duration(seconds: 1)),
+              const SnackBar(
+                content: Text("세션 만료. 재로그인 시도 중..."),
+                duration: Duration(seconds: 1),
+              ),
             );
           }
-          
+
           final storage = CredentialStorage();
           final userState = ref.read(userProvider);
           final currentUser = userState.currentUser;
-          
+
           if (currentUser != null) {
             failedId = currentUser.membershipNumber;
-            final creds = await storage.getCredentialsById(currentUser.membershipNumber);
+            final creds = await storage.getCredentialsById(
+              currentUser.membershipNumber,
+            );
             if (creds != null) {
-              await ref.read(authRepositoryProvider).login(creds['username']!, creds['password']!);
-              
+              await ref
+                  .read(authRepositoryProvider)
+                  .login(creds['username']!, creds['password']!);
+
               // Retry Reservation
               try {
                 await _performReservation(train, isStandby, preferSpecial);
                 return; // Success
               } catch (retryError) {
-                 if (isFromMacro) {
-                    // If macro, don't fail, just resume searching
-                    if (mounted) {
-                       ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text("재시도 실패 (${retryError.toString().replaceAll("Exception: ", "")})... 매크로 재개"), duration: const Duration(seconds: 1)),
-                       );
-                       // Resume Macro Loop
-                       _showMacroDialog(train);
-                       return;
-                    }
-                 }
-                 rethrow; // Manual mode -> show error
+                if (isFromMacro) {
+                  // If macro, don't fail, just resume searching
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          "재시도 실패 (${retryError.toString().replaceAll("Exception: ", "")})... 매크로 재개",
+                        ),
+                        duration: const Duration(seconds: 1),
+                      ),
+                    );
+                    // Resume Macro Loop
+                    _showMacroDialog(train);
+                    return;
+                  }
+                }
+                rethrow; // Manual mode -> show error
               }
             }
           }
         } catch (reloginError) {
-           // Fatal Re-login Failure
-           if (mounted) {
-             // Navigate to Login with Error & ID
-             Navigator.of(context).pushAndRemoveUntil(
-               MaterialPageRoute(
-                 builder: (context) => LoginScreen(
-                   initialRailType: "SRT", // Assume SRT for now as this is SRT logic
-                   initialId: failedId,
-                   errorMessage: "로그인에 실패하여 로그아웃되었습니다.",
-                 )
-               ),
-               (route) => false,
-             );
-             return;
-           }
+          // Fatal Re-login Failure
+          if (mounted) {
+            // Navigate to Login with Error & ID
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(
+                builder: (context) => LoginScreen(
+                  initialRailType:
+                      "SRT", // Assume SRT for now as this is SRT logic
+                  initialId: failedId,
+                  errorMessage: "로그인에 실패하여 로그아웃되었습니다.",
+                ),
+              ),
+              (route) => false,
+            );
+            return;
+          }
         }
       }
 
@@ -189,14 +205,393 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
     }
   }
 
-  Future<void> _performReservation(Train train, bool isStandby, bool preferSpecial) async {
-      final reservationResult = await _reserveRepo.reserve(
-        train: train,
-        passengers: widget.passengerCounts,
-        isStandby: isStandby,
-        preferSpecialSeat: preferSpecial,
-      );
+  Future<void> _performReservation(
+    Train train,
+    bool isStandby,
+    bool preferSpecial,
+  ) async {
+    final reservationResult = await _reserveRepo.reserve(
+      train: train,
+      passengers: widget.passengerCounts,
+      isStandby: isStandby,
+      preferSpecialSeat: preferSpecial,
+    );
 
+    final pnrNo = reservationResult['pnrNo'] ?? "Unknown";
+    String message = "예약번호: $pnrNo\n\n";
+
+    bool paid = false;
+    if (widget.paymentCard != null && !isStandby) {
+      try {
+        final userState = ref.read(userProvider);
+        final currentUser = userState.currentUser;
+        if (currentUser == null) throw Exception("로그인 정보가 없습니다.");
+
+        // Wait a bit before fetching tickets to ensure backend update
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        final tickets = await _ticketRepo.fetchTickets();
+        final ticket = tickets.firstWhere(
+          (t) => t.pnrNo == pnrNo,
+          orElse: () => throw Exception("예약 내역을 찾을 수 없습니다."),
+        );
+
+        await _ticketRepo.payTicket(
+          ticket: ticket,
+          cardNumber: widget.paymentCard!.number,
+          cardPassword: widget.paymentCard!.password,
+          cardExpiry: widget.paymentCard!.expiry,
+          cardAuthValue: widget.paymentCard!.birthday,
+          mbCrdNo: currentUser.membershipNumber,
+        );
+
+        message += "✅ 자동 결제 성공!\n\n[확인/취소] 탭에서 발권 내역을 확인하세요.";
+        paid = true;
+      } catch (e) {
+        message +=
+            "⚠️ 자동 결제 실패: ${e.toString().replaceAll("Exception: ", "")}\n\n직접 결제를 진행해주세요.";
+      }
+    } else {
+      message += "[확인/취소] 탭으로 이동합니다.";
+    }
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(paid ? "예약 및 결제 성공!" : "예약 성공!"),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.pop(context);
+              ref.invalidate(ticketsProvider);
+              ref.read(homeTabIndexProvider.notifier).state = 1;
+            },
+            child: const Text("확인"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showMacroDialog(Train targetTrain) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            if (!_isMacroRunning) {
+              _isMacroRunning = true;
+              _macroLoopId++;
+              final currentLoopId = _macroLoopId;
+
+              _runMacroLoop(targetTrain, currentLoopId, (count, status) {
+                // Safely call setStateDialog
+                if (_isMacroRunning && _macroLoopId == currentLoopId && mounted) {
+                  try {
+                    setStateDialog(() {});
+                  } catch (_) {
+                    // Ignore if dialog is disposed
+                  }
+                }
+              });
+            }
+
+            return AlertDialog(
+              title: const Text("자동 예매 실행 중"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const LinearProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text("열차: ${targetTrain.trainName} ${targetTrain.trainNo}"),
+                  const SizedBox(height: 8),
+                  Text("옵션: ${widget.seatOption.label}"),
+                  const SizedBox(height: 8),
+                  Text("시도 횟수: $_macroTryCount회"),
+                  const SizedBox(height: 8),
+                  Text(
+                    _macroStatus,
+                    style: const TextStyle(color: Colors.grey),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    _isMacroRunning = false;
+                    Navigator.pop(context);
+                  },
+                  child: const Text(
+                    "중단하기",
+                    style: TextStyle(color: Colors.red),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).then((_) {
+      _isMacroRunning = false;
+    });
+  }
+
+  int _getHumanDelay() {
+    final random = Random();
+    final base = 800;
+    final jitter = (random.nextDouble() * random.nextDouble() * 1200).toInt();
+    return base + jitter;
+  }
+
+  Future<void> _runMacroLoop(
+    Train target,
+    int loopId,
+    Function(int, String) onUpdate,
+  ) async {
+    _macroTryCount = 0;
+    final random = Random();
+    DateTime? limitEndTime;
+    int reloginAttempts = 0;
+
+    // 1. Scheduled Start Logic
+    if (widget.useSchedule && widget.scheduledTime != null) {
+      final now = DateTime.now();
+      var startDateTime = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        widget.scheduledTime!.hour,
+        widget.scheduledTime!.minute,
+      );
+      if (startDateTime.isBefore(now))
+        startDateTime = startDateTime.add(const Duration(days: 1));
+
+      while (_isMacroRunning &&
+          loopId == _macroLoopId &&
+          DateTime.now().isBefore(startDateTime)) {
+        final remaining = startDateTime.difference(DateTime.now());
+        final h = remaining.inHours;
+        final m = remaining.inMinutes % 60;
+        final s = remaining.inSeconds % 60;
+        _macroStatus =
+            "⏰ 예약 시작 대기 중...\n(${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')} 남음)";
+        onUpdate(0, _macroStatus);
+        await Future.delayed(const Duration(seconds: 1));
+      }
+
+      if (!_isMacroRunning || loopId != _macroLoopId) return;
+
+      // Re-login after waiting
+      _macroStatus = "🔄 세션 갱신을 위해 재로그인 중...";
+      onUpdate(0, _macroStatus);
+      try {
+        final storage = CredentialStorage();
+        final userState = ref.read(userProvider);
+        final currentUser = userState.currentUser;
+        if (currentUser != null) {
+          final creds = await storage.getCredentialsById(
+            currentUser.membershipNumber,
+          );
+          if (creds != null) {
+            await ref
+                .read(authRepositoryProvider)
+                .login(creds['username']!, creds['password']!);
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (widget.durationMinutes > 0) {
+      limitEndTime = DateTime.now().add(
+        Duration(minutes: widget.durationMinutes),
+      );
+    }
+
+    while (_isMacroRunning && loopId == _macroLoopId) {
+      // 2. Duration Check
+      if (limitEndTime != null && DateTime.now().isAfter(limitEndTime)) {
+        _macroStatus = "🛑 설정한 예매 지속 시간(${widget.durationMinutes}분)이 지났습니다.";
+        onUpdate(_macroTryCount, _macroStatus);
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_macroStatus),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        _isMacroRunning = false;
+        Navigator.pop(context); // Close Dialog
+        return;
+      }
+
+      _macroTryCount++;
+      if (_macroTryCount % (20 + random.nextInt(10)) == 0) {
+        final breakTime = 3 + random.nextInt(5);
+        for (int i = breakTime; i > 0; i--) {
+          if (!_isMacroRunning || loopId != _macroLoopId) return;
+          _macroStatus = "과도한 접속 방지 휴식 중... ${i}초";
+          onUpdate(_macroTryCount, _macroStatus);
+          await Future.delayed(const Duration(seconds: 1));
+        }
+      }
+
+      _macroStatus = "잔여석 조회 중...";
+      onUpdate(_macroTryCount, _macroStatus);
+
+      try {
+        final trains = await _trainRepo.searchTrains(
+          depStation: target.depStation,
+          arrStation: target.arrStation,
+          date: target.depDate,
+          time: target.depTime,
+        );
+        reloginAttempts = 0; // Success, reset attempts
+
+        if (!_isMacroRunning || loopId != _macroLoopId) return;
+
+        final freshTarget = trains.firstWhere(
+          (t) => t.trainNo == target.trainNo,
+          orElse: () => target,
+        );
+
+        if (_canReserve(freshTarget)) {
+          _macroStatus = "좌석 발견! 예약 시도 중...";
+          onUpdate(_macroTryCount, _macroStatus);
+
+          // ATTEMPT RESERVATION INSIDE LOOP
+          try {
+            bool isStandby = false;
+            bool preferSpecial = false;
+            // Determine options (Logic copied from _attemptReserve)
+            switch (widget.seatOption) {
+              case SeatOption.generalFirst:
+                if (!freshTarget.canReserveGeneral) {
+                  if (freshTarget.canReserveSpecial) preferSpecial = true;
+                  else if (freshTarget.canReserveStandby) isStandby = true;
+                }
+                break;
+              case SeatOption.generalOnly:
+                if (!freshTarget.canReserveGeneral && freshTarget.canReserveStandby) isStandby = true;
+                break;
+              case SeatOption.specialFirst:
+                if (freshTarget.canReserveSpecial) preferSpecial = true;
+                else if (!freshTarget.canReserveGeneral && freshTarget.canReserveStandby) isStandby = true;
+                break;
+              case SeatOption.specialOnly:
+                if (freshTarget.canReserveSpecial) preferSpecial = true;
+                else if (freshTarget.canReserveStandby) isStandby = true;
+                break;
+            }
+
+            // Perform Reservation Logic directly
+             final reservationResult = await _reserveRepo.reserve(
+              train: freshTarget,
+              passengers: widget.passengerCounts,
+              isStandby: isStandby,
+              preferSpecialSeat: preferSpecial,
+            );
+
+            // SUCCESS!
+            _isMacroRunning = false;
+            if (mounted) Navigator.pop(context); // Close Macro Dialog
+            
+            // Show Success Dialog / Payment
+            if (mounted) _handleReservationSuccess(reservationResult, isStandby);
+            return;
+
+          } catch (reserveError) {
+             // Handle Reservation Error
+             bool isSession = (reserveError is DioException && reserveError.error is SessionExpiredException) ||
+                             reserveError.toString().contains("로그인");
+             
+             if (isSession) {
+               throw reserveError; // Throw to outer catch block for re-login logic
+             }
+             
+             // Other errors (e.g. taken seat) -> Continue loop
+             _macroStatus = "예약 실패 (${reserveError.toString().replaceAll("Exception: ", "")})... 재시도";
+             onUpdate(_macroTryCount, _macroStatus);
+             await Future.delayed(const Duration(seconds: 1));
+             continue; // Continue searching
+          }
+        }
+        await Future.delayed(Duration(milliseconds: _getHumanDelay()));
+      } catch (e) {
+        bool isSessionError =
+            (e is DioException && e.error is SessionExpiredException) ||
+            e.toString().contains("로그인");
+
+        if (isSessionError) {
+          String? failedId;
+          _macroStatus = "🔑 세션 만료. 자동 재로그인 시도 중...";
+          onUpdate(_macroTryCount, _macroStatus);
+          
+          if (reloginAttempts >= 1) {
+             // Fatal Re-login Failure
+            _isMacroRunning = false;
+            if (mounted) Navigator.pop(context); // Close Dialog
+            
+            // Need to get ID for login screen
+             final userState = ref.read(userProvider);
+             failedId = userState.currentUser?.membershipNumber;
+
+            if (mounted) {
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(
+                 builder: (context) => LoginScreen(
+                   initialRailType: "SRT",
+                   initialId: failedId,
+                   errorMessage: "로그인에 실패하여 로그아웃되었습니다.",
+                 )
+               ),
+               (route) => false
+              );
+            }
+            return;
+          }
+
+          try {
+            reloginAttempts++;
+            final storage = CredentialStorage();
+            final userState = ref.read(userProvider);
+            final currentUser = userState.currentUser;
+            if (currentUser != null) {
+              final creds = await storage.getCredentialsById(
+                currentUser.membershipNumber,
+              );
+              if (creds != null) {
+                await ref
+                    .read(authRepositoryProvider)
+                    .login(creds['username']!, creds['password']!);
+                _macroStatus = "✅ 재로그인 성공. 다시 시도합니다.";
+                onUpdate(_macroTryCount, _macroStatus);
+                continue; // Continue loop immediately
+              }
+            }
+            throw Exception("No credentials found");
+          } catch (_) {
+             // Re-login failed (will be caught next loop or handled here)
+             // We increment reloginAttempts, so next time it will hit the limit if we just continue.
+             // But actually we should probably fail hard here if login throws.
+             // Let's rely on reloginAttempts logic in next iteration OR fail immediately.
+             // For robustness, let's continue to let the 'reloginAttempts >= 1' check handle it if it persists.
+          }
+        }
+        _macroStatus = "오류 발생 (${e.toString().replaceAll("Exception: ", "")})... 재시도";
+        onUpdate(_macroTryCount, _macroStatus);
+        await Future.delayed(const Duration(seconds: 1));
+      }
+    }
+  }
+
+  // Extracted Success Logic
+  Future<void> _handleReservationSuccess(Map<String, dynamic> reservationResult, bool isStandby) async {
       final pnrNo = reservationResult['pnrNo'] ?? "Unknown";
       String message = "예약번호: $pnrNo\n\n";
 
@@ -256,190 +651,6 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
       );
   }
 
-  void _showMacroDialog(Train targetTrain) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setStateDialog) {
-            if (!_isMacroRunning) {
-              _isMacroRunning = true;
-              _runMacroLoop(targetTrain, (count, status) {
-                if (mounted) setStateDialog(() {});
-              });
-            }
-
-            return AlertDialog(
-              title: const Text("자동 예매 실행 중"),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const LinearProgressIndicator(),
-                  const SizedBox(height: 16),
-                  Text("열차: ${targetTrain.trainName} ${targetTrain.trainNo}"),
-                  const SizedBox(height: 8),
-                  Text("옵션: ${widget.seatOption.label}"),
-                  const SizedBox(height: 8),
-                  Text("시도 횟수: $_macroTryCount회"),
-                  const SizedBox(height: 8),
-                  Text(_macroStatus, style: const TextStyle(color: Colors.grey), textAlign: TextAlign.center),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    _isMacroRunning = false;
-                    Navigator.pop(context);
-                  },
-                  child: const Text("중단하기", style: TextStyle(color: Colors.red)),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    ).then((_) {
-      _isMacroRunning = false;
-    });
-  }
-
-  int _getHumanDelay() {
-    final random = Random();
-    final base = 800;
-    final jitter = (random.nextDouble() * random.nextDouble() * 1200).toInt();
-    return base + jitter;
-  }
-
-  Future<void> _runMacroLoop(Train target, Function(int, String) onUpdate) async {
-    _macroTryCount = 0;
-    final random = Random();
-    DateTime? limitEndTime;
-    int reloginAttempts = 0;
-
-    // 1. Scheduled Start Logic
-    if (widget.useSchedule && widget.scheduledTime != null) {
-      final now = DateTime.now();
-      var startDateTime = DateTime(now.year, now.month, now.day, widget.scheduledTime!.hour, widget.scheduledTime!.minute);
-      if (startDateTime.isBefore(now)) startDateTime = startDateTime.add(const Duration(days: 1));
-
-      while (_isMacroRunning && DateTime.now().isBefore(startDateTime)) {
-        final remaining = startDateTime.difference(DateTime.now());
-        final h = remaining.inHours;
-        final m = remaining.inMinutes % 60;
-        final s = remaining.inSeconds % 60;
-        _macroStatus = "⏰ 예약 시작 대기 중...\n(${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')} 남음)";
-        onUpdate(0, _macroStatus);
-        await Future.delayed(const Duration(seconds: 1));
-      }
-
-      if (!_isMacroRunning) return;
-
-      // Re-login after waiting
-      _macroStatus = "🔄 세션 갱신을 위해 재로그인 중...";
-      onUpdate(0, _macroStatus);
-      try {
-        final storage = CredentialStorage();
-        final userState = ref.read(userProvider);
-        final currentUser = userState.currentUser;
-        if (currentUser != null) {
-          final creds = await storage.getCredentialsById(currentUser.membershipNumber);
-          if (creds != null) {
-            await ref.read(authRepositoryProvider).login(creds['username']!, creds['password']!);
-          }
-        }
-      } catch (_) {}
-    }
-
-    if (widget.durationMinutes > 0) {
-      limitEndTime = DateTime.now().add(Duration(minutes: widget.durationMinutes));
-    }
-
-    while (_isMacroRunning) {
-      // 2. Duration Check
-      if (limitEndTime != null && DateTime.now().isAfter(limitEndTime)) {
-        _macroStatus = "🛑 설정한 예매 지속 시간(${widget.durationMinutes}분)이 지났습니다.";
-        onUpdate(_macroTryCount, _macroStatus);
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_macroStatus), backgroundColor: Colors.orange));
-        _isMacroRunning = false;
-        Navigator.pop(context);
-        return;
-      }
-
-      _macroTryCount++;
-      if (_macroTryCount % (20 + random.nextInt(10)) == 0) {
-        final breakTime = 3 + random.nextInt(5);
-        for (int i = breakTime; i > 0; i--) {
-          if (!_isMacroRunning) return;
-          _macroStatus = "과도한 접속 방지 휴식 중... ${i}초";
-          onUpdate(_macroTryCount, _macroStatus);
-          await Future.delayed(const Duration(seconds: 1));
-        }
-      }
-
-      _macroStatus = "잔여석 조회 중...";
-      onUpdate(_macroTryCount, _macroStatus);
-
-      try {
-        final trains = await _trainRepo.searchTrains(
-          depStation: target.depStation, arrStation: target.arrStation,
-          date: target.depDate, time: target.depTime,
-        );
-        reloginAttempts = 0; // Success, reset attempts
-
-        final freshTarget = trains.firstWhere((t) => t.trainNo == target.trainNo, orElse: () => target);
-
-        if (_canReserve(freshTarget)) {
-          _macroStatus = "좌석 발견! 예약 시도 중...";
-          onUpdate(_macroTryCount, _macroStatus);
-          _isMacroRunning = false;
-          Navigator.pop(context);
-          await _attemptReserve(freshTarget, isFromMacro: true); // Pass true
-          return;
-        }
-        await Future.delayed(Duration(milliseconds: _getHumanDelay()));
-      } catch (e) {
-        bool isSessionError = (e is DioException && e.error is SessionExpiredException) || e.toString().contains("로그인");
-
-        if (isSessionError) {
-          if (reloginAttempts >= 1) {
-            _macroStatus = "❌ 재로그인 실패. 로그아웃 처리합니다.";
-            onUpdate(_macroTryCount, _macroStatus);
-            _isMacroRunning = false;
-            // Add ID passing here if needed, but existing logic handles it roughly
-            if (mounted) Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
-            return;
-          }
-
-          _macroStatus = "🔑 세션 만료 감지. 자동 재로그인 시도 중...";
-          onUpdate(_macroTryCount, _macroStatus);
-          try {
-            reloginAttempts++;
-            final storage = CredentialStorage();
-            final userState = ref.read(userProvider);
-            final currentUser = userState.currentUser;
-            if (currentUser != null) {
-              final creds = await storage.getCredentialsById(currentUser.membershipNumber);
-              if (creds != null) {
-                await ref.read(authRepositoryProvider).login(creds['username']!, creds['password']!);
-                _macroStatus = "✅ 재로그인 성공. 다시 예매를 시작합니다.";
-                onUpdate(_macroTryCount, _macroStatus);
-                continue;
-              }
-            }
-          } catch (_) {
-            _isMacroRunning = false;
-            if (mounted) Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
-            return;
-          }
-        }
-        _macroStatus = "오류 발생. 재시도...";
-        onUpdate(_macroTryCount, _macroStatus);
-        await Future.delayed(const Duration(seconds: 1));
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -461,7 +672,19 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
                     children: [
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [Text("[${train.trainName}] ${train.trainNo}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)), Text("소요시간: $duration분", style: const TextStyle(color: Colors.grey))],
+                        children: [
+                          Text(
+                            "[${train.trainName}] ${train.trainNo}",
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          Text(
+                            "소요시간: $duration분",
+                            style: const TextStyle(color: Colors.grey),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 8),
                       Row(
@@ -476,10 +699,22 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
-                          _buildStatusChip("특실", train.specialSeatState, train.canReserveSpecial),
-                          _buildStatusChip("일반실", train.generalSeatState, train.canReserveGeneral),
+                          _buildStatusChip(
+                            "특실",
+                            train.specialSeatState,
+                            train.canReserveSpecial,
+                          ),
+                          _buildStatusChip(
+                            "일반실",
+                            train.generalSeatState,
+                            train.canReserveGeneral,
+                          ),
                           if (train.reserveWaitCode >= 0)
-                            _buildStatusChip("예약대기", train.reserveWaitCode == 9 ? "신청가능" : "마감", train.canReserveStandby),
+                            _buildStatusChip(
+                              "예약대기",
+                              train.reserveWaitCode == 9 ? "신청가능" : "마감",
+                              train.canReserveStandby,
+                            ),
                         ],
                       ),
                       const SizedBox(height: 12),
@@ -487,8 +722,16 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
                         width: double.infinity,
                         child: FilledButton(
                           onPressed: () => _handleReserve(train),
-                          style: FilledButton.styleFrom(backgroundColor: canReserveNow ? Colors.purple : Colors.orange),
-                          child: Text(canReserveNow ? "예약하기" : "자동 예매 시작 (${widget.seatOption.label})"),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: canReserveNow
+                                ? Colors.purple
+                                : Colors.orange,
+                          ),
+                          child: Text(
+                            canReserveNow
+                                ? "예약하기"
+                                : "자동 예매 시작 (${widget.seatOption.label})",
+                          ),
                         ),
                       ),
                     ],
@@ -497,7 +740,11 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
               );
             },
           ),
-          if (_isReserving) Container(color: Colors.black54, child: const Center(child: CircularProgressIndicator())),
+          if (_isReserving)
+            Container(
+              color: Colors.black54,
+              child: const Center(child: CircularProgressIndicator()),
+            ),
         ],
       ),
     );
@@ -505,14 +752,25 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
 
   Widget _buildTimeColumn(String station, String time) {
     final formattedTime = "${time.substring(0, 2)}:${time.substring(2, 4)}";
-    return Column(children: [Text(station, style: const TextStyle(fontSize: 16)), Text(formattedTime, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))]);
+    return Column(
+      children: [
+        Text(station, style: const TextStyle(fontSize: 16)),
+        Text(
+          formattedTime,
+          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+        ),
+      ],
+    );
   }
 
   Widget _buildStatusChip(String label, String status, bool isAvailable) {
     return Chip(
       label: Text("$label $status"),
       backgroundColor: isAvailable ? Colors.green[100] : Colors.grey[200],
-      labelStyle: TextStyle(color: isAvailable ? Colors.green[900] : Colors.grey[600], fontSize: 12),
+      labelStyle: TextStyle(
+        color: isAvailable ? Colors.green[900] : Colors.grey[600],
+        fontSize: 12,
+      ),
     );
   }
 

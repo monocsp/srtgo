@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:srtgo_mobile/features/auth/presentation/screens/login_screen.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/presentation/login_screen.dart';
+import '../../auth/presentation/logic/user_provider.dart';
 import 'card_management_screen.dart';
 
 import '../../../../core/network/http_client.dart';
