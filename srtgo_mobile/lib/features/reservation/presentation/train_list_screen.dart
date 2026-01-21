@@ -281,9 +281,9 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) {
+      builder: (dialogContext) {
         return StatefulBuilder(
-          builder: (context, setStateDialog) {
+          builder: (sbContext, setStateDialog) {
             if (!_isMacroRunning) {
               _isMacroRunning = true;
               _macroLoopId++;
@@ -325,7 +325,22 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
                 TextButton(
                   onPressed: () {
                     _isMacroRunning = false;
-                    Navigator.pop(context);
+                    Navigator.pop(dialogContext);
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: const Text("사용자 요청으로 예매가 중단되었습니다."),
+                          duration: const Duration(days: 1), // Persistent until action
+                          action: SnackBarAction(
+                            label: '닫기',
+                            textColor: Colors.white,
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                            },
+                          ),
+                        ),
+                      );
+                    }
                   },
                   child: const Text(
                     "중단하기",
@@ -418,15 +433,26 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
       if (limitEndTime != null && DateTime.now().isAfter(limitEndTime)) {
         _macroStatus = "🛑 설정한 예매 지속 시간(${widget.durationMinutes}분)이 지났습니다.";
         onUpdate(_macroTryCount, _macroStatus);
-        if (mounted)
+        
+        _isMacroRunning = false;
+        if (mounted) Navigator.pop(context); // Close Dialog
+
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(_macroStatus),
+              content: const Text("설정된 시간 내에 예매를 실패하여 중단되었습니다."),
               backgroundColor: Colors.orange,
+              duration: const Duration(days: 1), // Persistent
+              action: SnackBarAction(
+                label: '닫기',
+                textColor: Colors.white,
+                onPressed: () {
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                },
+              ),
             ),
           );
-        _isMacroRunning = false;
-        Navigator.pop(context); // Close Dialog
+        }
         return;
       }
 
