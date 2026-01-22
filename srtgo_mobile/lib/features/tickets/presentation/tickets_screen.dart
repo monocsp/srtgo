@@ -5,13 +5,41 @@ import '../data/models/ticket_model.dart';
 import '../../settings/data/repositories/card_repository.dart';
 import '../../settings/data/models/credit_card_model.dart';
 import 'logic/tickets_provider.dart';
-import '../../auth/presentation/logic/user_provider.dart'; // Added Import
+import '../../auth/presentation/logic/user_provider.dart';
+import '../../auth/presentation/login_screen.dart';
+import '../../../../core/network/session_exception.dart';
 
 class TicketsScreen extends ConsumerWidget {
   const TicketsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.listen<AsyncValue<List<Ticket>>>(ticketsProvider, (previous, next) {
+      if (next is AsyncError) {
+        final err = next.error;
+        if (err.toString().contains("로그인") || err is SessionExpiredException) {
+           // Get current user ID for convenience
+           final userState = ref.read(userProvider);
+           final userId = userState.currentUser?.membershipNumber;
+           
+           ScaffoldMessenger.of(context).showSnackBar(
+             const SnackBar(content: Text("세션이 만료되었습니다. 다시 로그인해주세요.")),
+           );
+
+           Navigator.of(context).pushAndRemoveUntil(
+             MaterialPageRoute(
+               builder: (context) => LoginScreen(
+                 initialRailType: "SRT", // Default to SRT for now
+                 initialId: userId,
+                 errorMessage: "세션이 만료되어 로그아웃되었습니다.",
+               )
+             ),
+             (route) => false
+           );
+        }
+      }
+    });
+
     final ticketsAsync = ref.watch(ticketsProvider);
 
     return Scaffold(

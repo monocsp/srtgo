@@ -22,6 +22,8 @@ class Train {
   final String specialSeatState; // 특실 상태 텍스트
   final int reserveWaitCode;     // 예약대기 코드 (9: 가능)
 
+  String get id => "$trainCode-$trainNo-$depDate-$depTime";
+
   Train({
     required this.trainCode,
     required this.trainName,

@@ -6,25 +6,19 @@ import 'package:srtgo_mobile/core/constants/seat_options.dart';
 import 'package:srtgo_mobile/features/reservation/data/models/train_model.dart';
 import '../data/srt_reservation_repository.dart';
 import '../data/srt_train_repository.dart';
+import 'logic/cart_provider.dart'; // Added Import
 import '../../auth/presentation/logic/user_provider.dart';
 import '../../auth/data/repositories/auth_repository_impl.dart';
-import '../../auth/presentation/login_screen.dart'; // Added Import
+import '../../auth/presentation/login_screen.dart';
 import '../../../core/network/session_exception.dart';
-import '../../../core/storage/credential_storage.dart';
+
 import '../../home/presentation/logic/home_providers.dart';
 import '../../tickets/presentation/logic/tickets_provider.dart';
 import '../../tickets/data/repositories/srt_ticket_repository.dart';
 import '../../settings/data/models/credit_card_model.dart';
 
 class TrainListScreen extends ConsumerStatefulWidget {
-  final List<Train> trains;
-  final String title;
-  final Map<String, int> passengerCounts;
-  final CreditCard? paymentCard;
-  final SeatOption seatOption;
-  final bool useSchedule;
-  final TimeOfDay? scheduledTime;
-  final int durationMinutes;
+  // ... (rest remains same)
 
   const TrainListScreen({
     super.key,
@@ -291,7 +285,9 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
 
               _runMacroLoop(targetTrain, currentLoopId, (count, status) {
                 // Safely call setStateDialog
-                if (_isMacroRunning && _macroLoopId == currentLoopId && mounted) {
+                if (_isMacroRunning &&
+                    _macroLoopId == currentLoopId &&
+                    mounted) {
                   try {
                     setStateDialog(() {});
                   } catch (_) {
@@ -330,12 +326,16 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: const Text("사용자 요청으로 예매가 중단되었습니다."),
-                          duration: const Duration(days: 1), // Persistent until action
+                          duration: const Duration(
+                            days: 1,
+                          ), // Persistent until action
                           action: SnackBarAction(
                             label: '닫기',
                             textColor: Colors.white,
                             onPressed: () {
-                              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                              ScaffoldMessenger.of(
+                                context,
+                              ).hideCurrentSnackBar();
                             },
                           ),
                         ),
@@ -433,7 +433,7 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
       if (limitEndTime != null && DateTime.now().isAfter(limitEndTime)) {
         _macroStatus = "🛑 설정한 예매 지속 시간(${widget.durationMinutes}분)이 지났습니다.";
         onUpdate(_macroTryCount, _macroStatus);
-        
+
         _isMacroRunning = false;
         if (mounted) Navigator.pop(context); // Close Dialog
 
@@ -498,25 +498,34 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
             switch (widget.seatOption) {
               case SeatOption.generalFirst:
                 if (!freshTarget.canReserveGeneral) {
-                  if (freshTarget.canReserveSpecial) preferSpecial = true;
-                  else if (freshTarget.canReserveStandby) isStandby = true;
+                  if (freshTarget.canReserveSpecial)
+                    preferSpecial = true;
+                  else if (freshTarget.canReserveStandby)
+                    isStandby = true;
                 }
                 break;
               case SeatOption.generalOnly:
-                if (!freshTarget.canReserveGeneral && freshTarget.canReserveStandby) isStandby = true;
+                if (!freshTarget.canReserveGeneral &&
+                    freshTarget.canReserveStandby)
+                  isStandby = true;
                 break;
               case SeatOption.specialFirst:
-                if (freshTarget.canReserveSpecial) preferSpecial = true;
-                else if (!freshTarget.canReserveGeneral && freshTarget.canReserveStandby) isStandby = true;
+                if (freshTarget.canReserveSpecial)
+                  preferSpecial = true;
+                else if (!freshTarget.canReserveGeneral &&
+                    freshTarget.canReserveStandby)
+                  isStandby = true;
                 break;
               case SeatOption.specialOnly:
-                if (freshTarget.canReserveSpecial) preferSpecial = true;
-                else if (freshTarget.canReserveStandby) isStandby = true;
+                if (freshTarget.canReserveSpecial)
+                  preferSpecial = true;
+                else if (freshTarget.canReserveStandby)
+                  isStandby = true;
                 break;
             }
 
             // Perform Reservation Logic directly
-             final reservationResult = await _reserveRepo.reserve(
+            final reservationResult = await _reserveRepo.reserve(
               train: freshTarget,
               passengers: widget.passengerCounts,
               isStandby: isStandby,
@@ -526,25 +535,28 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
             // SUCCESS!
             _isMacroRunning = false;
             if (mounted) Navigator.pop(context); // Close Macro Dialog
-            
-            // Show Success Dialog / Payment
-            if (mounted) _handleReservationSuccess(reservationResult, isStandby);
-            return;
 
+            // Show Success Dialog / Payment
+            if (mounted)
+              _handleReservationSuccess(reservationResult, isStandby);
+            return;
           } catch (reserveError) {
-             // Handle Reservation Error
-             bool isSession = (reserveError is DioException && reserveError.error is SessionExpiredException) ||
-                             reserveError.toString().contains("로그인");
-             
-             if (isSession) {
-               throw reserveError; // Throw to outer catch block for re-login logic
-             }
-             
-             // Other errors (e.g. taken seat) -> Continue loop
-             _macroStatus = "예약 실패 (${reserveError.toString().replaceAll("Exception: ", "")})... 재시도";
-             onUpdate(_macroTryCount, _macroStatus);
-             await Future.delayed(const Duration(seconds: 1));
-             continue; // Continue searching
+            // Handle Reservation Error
+            bool isSession =
+                (reserveError is DioException &&
+                    reserveError.error is SessionExpiredException) ||
+                reserveError.toString().contains("로그인");
+
+            if (isSession) {
+              throw reserveError; // Throw to outer catch block for re-login logic
+            }
+
+            // Other errors (e.g. taken seat) -> Continue loop
+            _macroStatus =
+                "예약 실패 (${reserveError.toString().replaceAll("Exception: ", "")})... 재시도";
+            onUpdate(_macroTryCount, _macroStatus);
+            await Future.delayed(const Duration(seconds: 1));
+            continue; // Continue searching
           }
         }
         await Future.delayed(Duration(milliseconds: _getHumanDelay()));
@@ -557,26 +569,26 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
           String? failedId;
           _macroStatus = "🔑 세션 만료. 자동 재로그인 시도 중...";
           onUpdate(_macroTryCount, _macroStatus);
-          
+
           if (reloginAttempts >= 1) {
-             // Fatal Re-login Failure
+            // Fatal Re-login Failure
             _isMacroRunning = false;
             if (mounted) Navigator.pop(context); // Close Dialog
-            
+
             // Need to get ID for login screen
-             final userState = ref.read(userProvider);
-             failedId = userState.currentUser?.membershipNumber;
+            final userState = ref.read(userProvider);
+            failedId = userState.currentUser?.membershipNumber;
 
             if (mounted) {
               Navigator.of(context).pushAndRemoveUntil(
                 MaterialPageRoute(
-                 builder: (context) => LoginScreen(
-                   initialRailType: "SRT",
-                   initialId: failedId,
-                   errorMessage: "로그인에 실패하여 로그아웃되었습니다.",
-                 )
-               ),
-               (route) => false
+                  builder: (context) => LoginScreen(
+                    initialRailType: "SRT",
+                    initialId: failedId,
+                    errorMessage: "로그인에 실패하여 로그아웃되었습니다.",
+                  ),
+                ),
+                (route) => false,
               );
             }
             return;
@@ -602,14 +614,15 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
             }
             throw Exception("No credentials found");
           } catch (_) {
-             // Re-login failed (will be caught next loop or handled here)
-             // We increment reloginAttempts, so next time it will hit the limit if we just continue.
-             // But actually we should probably fail hard here if login throws.
-             // Let's rely on reloginAttempts logic in next iteration OR fail immediately.
-             // For robustness, let's continue to let the 'reloginAttempts >= 1' check handle it if it persists.
+            // Re-login failed (will be caught next loop or handled here)
+            // We increment reloginAttempts, so next time it will hit the limit if we just continue.
+            // But actually we should probably fail hard here if login throws.
+            // Let's rely on reloginAttempts logic in next iteration OR fail immediately.
+            // For robustness, let's continue to let the 'reloginAttempts >= 1' check handle it if it persists.
           }
         }
-        _macroStatus = "오류 발생 (${e.toString().replaceAll("Exception: ", "")})... 재시도";
+        _macroStatus =
+            "오류 발생 (${e.toString().replaceAll("Exception: ", "")})... 재시도";
         onUpdate(_macroTryCount, _macroStatus);
         await Future.delayed(const Duration(seconds: 1));
       }
@@ -617,64 +630,68 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
   }
 
   // Extracted Success Logic
-  Future<void> _handleReservationSuccess(Map<String, dynamic> reservationResult, bool isStandby) async {
-      final pnrNo = reservationResult['pnrNo'] ?? "Unknown";
-      String message = "예약번호: $pnrNo\n\n";
+  Future<void> _handleReservationSuccess(
+    Map<String, dynamic> reservationResult,
+    bool isStandby,
+  ) async {
+    final pnrNo = reservationResult['pnrNo'] ?? "Unknown";
+    String message = "예약번호: $pnrNo\n\n";
 
-      bool paid = false;
-      if (widget.paymentCard != null && !isStandby) {
-        try {
-          final userState = ref.read(userProvider);
-          final currentUser = userState.currentUser;
-          if (currentUser == null) throw Exception("로그인 정보가 없습니다.");
+    bool paid = false;
+    if (widget.paymentCard != null && !isStandby) {
+      try {
+        final userState = ref.read(userProvider);
+        final currentUser = userState.currentUser;
+        if (currentUser == null) throw Exception("로그인 정보가 없습니다.");
 
-          // Wait a bit before fetching tickets to ensure backend update
-          await Future.delayed(const Duration(milliseconds: 500));
+        // Wait a bit before fetching tickets to ensure backend update
+        await Future.delayed(const Duration(milliseconds: 500));
 
-          final tickets = await _ticketRepo.fetchTickets();
-          final ticket = tickets.firstWhere(
-             (t) => t.pnrNo == pnrNo,
-             orElse: () => throw Exception("예약 내역을 찾을 수 없습니다."),
-          );
+        final tickets = await _ticketRepo.fetchTickets();
+        final ticket = tickets.firstWhere(
+          (t) => t.pnrNo == pnrNo,
+          orElse: () => throw Exception("예약 내역을 찾을 수 없습니다."),
+        );
 
-          await _ticketRepo.payTicket(
-            ticket: ticket,
-            cardNumber: widget.paymentCard!.number,
-            cardPassword: widget.paymentCard!.password,
-            cardExpiry: widget.paymentCard!.expiry,
-            cardAuthValue: widget.paymentCard!.birthday,
-            mbCrdNo: currentUser.membershipNumber,
-          );
+        await _ticketRepo.payTicket(
+          ticket: ticket,
+          cardNumber: widget.paymentCard!.number,
+          cardPassword: widget.paymentCard!.password,
+          cardExpiry: widget.paymentCard!.expiry,
+          cardAuthValue: widget.paymentCard!.birthday,
+          mbCrdNo: currentUser.membershipNumber,
+        );
 
-          message += "✅ 자동 결제 성공!\n\n[확인/취소] 탭에서 발권 내역을 확인하세요.";
-          paid = true;
-        } catch (e) {
-          message += "⚠️ 자동 결제 실패: ${e.toString().replaceAll("Exception: ", "")}\n\n직접 결제를 진행해주세요.";
-        }
-      } else {
-        message += "[확인/취소] 탭으로 이동합니다.";
+        message += "✅ 자동 결제 성공!\n\n[확인/취소] 탭에서 발권 내역을 확인하세요.";
+        paid = true;
+      } catch (e) {
+        message +=
+            "⚠️ 자동 결제 실패: ${e.toString().replaceAll("Exception: ", "")}\n\n직접 결제를 진행해주세요.";
       }
+    } else {
+      message += "[확인/취소] 탭으로 이동합니다.";
+    }
 
-      if (!mounted) return;
+    if (!mounted) return;
 
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(paid ? "예약 및 결제 성공!" : "예약 성공!"),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                Navigator.pop(context);
-                ref.invalidate(ticketsProvider);
-                ref.read(homeTabIndexProvider.notifier).state = 1;
-              },
-              child: const Text("확인"),
-            ),
-          ],
-        ),
-      );
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(paid ? "예약 및 결제 성공!" : "예약 성공!"),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.pop(context);
+              ref.invalidate(ticketsProvider);
+              ref.read(homeTabIndexProvider.notifier).state = 1;
+            },
+            child: const Text("확인"),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -688,7 +705,9 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
             itemBuilder: (context, index) {
               final train = widget.trains[index];
               final duration = _calculateDuration(train.depTime, train.arrTime);
-              final canReserveNow = _canReserve(train);
+
+              final cart = ref.watch(cartProvider);
+              final isInCart = cart.any((t) => t.id == train.id);
 
               return Card(
                 margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
@@ -746,18 +765,21 @@ class _TrainListScreenState extends ConsumerState<TrainListScreen> {
                       const SizedBox(height: 12),
                       SizedBox(
                         width: double.infinity,
-                        child: FilledButton(
-                          onPressed: () => _handleReserve(train),
+                        child: FilledButton.icon(
+                          onPressed: () {
+                            ref.read(cartProvider.notifier).toggleTrain(train);
+                          },
                           style: FilledButton.styleFrom(
-                            backgroundColor: canReserveNow
-                                ? Colors.purple
-                                : Colors.orange,
+                            backgroundColor: isInCart
+                                ? Colors.redAccent
+                                : Colors.blueGrey,
                           ),
-                          child: Text(
-                            canReserveNow
-                                ? "예약하기"
-                                : "자동 예매 시작 (${widget.seatOption.label})",
+                          icon: Icon(
+                            isInCart
+                                ? Icons.remove_shopping_cart
+                                : Icons.add_shopping_cart,
                           ),
+                          label: Text(isInCart ? "선택 해제" : "장바구니 담기"),
                         ),
                       ),
                     ],
